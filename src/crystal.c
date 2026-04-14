@@ -32,7 +32,6 @@
 
 #define _GNU_SOURCE  // Needed for M_PI from <math.h>
 #include "crystal.h"
-#include "decor.h"
 #include "ewmh.h"
 
 // Forward declaration removed — compositor.c is no longer linked.
@@ -122,6 +121,15 @@ struct WindowTexture {
 // All Crystal state lives in this single struct. Using a static struct at
 // file scope means only crystal.c can access it, keeping the compositor's
 // internals private from the rest of the window manager.
+
+// Global flag indicating whether compositing is active. In AuraOS this is
+// defined in decor.c and shared with frame.c. In standalone Crystal we
+// define it here since there is no external WM module providing it.
+#if !defined(CRYSTAL_EMBEDDED_IN_WM)
+bool compositor_active = false;
+#else
+extern bool compositor_active;
+#endif
 
 static struct {
     bool active;                    // Is Crystal initialized and running?
