@@ -20,8 +20,8 @@
 //   only (2R+1) samples. For R=16 that's 33 samples per pass instead of
 //   1,089 samples in a single pass. Massive performance win.
 //
-// How it fits into Crystal Compositor:
-//   Crystal uses blur for two things:
+// How it fits into MoonRock Compositor:
+//   MoonRock uses blur for two things:
 //   1. Background blur behind translucent panels (like the dock shelf)
 //   2. Pre-generating shadow textures (blur a solid shape to create soft edges)
 //

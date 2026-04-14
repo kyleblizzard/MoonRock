@@ -4,7 +4,7 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Animation Framework — generalized animation system for Crystal
+//  MoonRock Animation Framework — generalized animation system for MoonRock
 // ============================================================================
 //
 // This module replaces the ad-hoc genie animation code with a proper framework
@@ -21,7 +21,7 @@
 //     - How long it should take
 //     - What easing function to use (linear, ease-in, ease-out, spring, etc.)
 //
-//   Each frame, Crystal's composite loop calls:
+//   Each frame, MoonRock's composite loop calls:
 //     1. anim_update() — advances all active animations based on elapsed time
 //     2. anim_draw()   — renders each animated window with its current transform
 //
@@ -43,8 +43,8 @@
 //
 // ============================================================================
 
-#ifndef CRYSTAL_ANIM_H
-#define CRYSTAL_ANIM_H
+#ifndef MR_ANIM_H
+#define MR_ANIM_H
 
 #include <stdbool.h>
 #include <GL/gl.h>
@@ -163,11 +163,11 @@ typedef struct {
 // ============================================================================
 
 // Initialize the animation system.
-// Clears all animation slots to inactive. Call once at Crystal startup.
+// Clears all animation slots to inactive. Call once at MoonRock startup.
 void anim_init(void);
 
 // Shut down the animation system.
-// Marks all animations inactive. Call during Crystal shutdown.
+// Marks all animations inactive. Call during MoonRock shutdown.
 void anim_shutdown(void);
 
 
@@ -264,7 +264,7 @@ int anim_zoom_in(GLuint texture, int tex_w, int tex_h,
 // (the compositor can go back to damage-driven rendering to save CPU/GPU).
 bool anim_update(void);
 
-// Draw all active animations. Call during crystal_composite() after drawing
+// Draw all active animations. Call during mr_composite() after drawing
 // normal (non-animated) windows.
 //
 // For each active animation, this interpolates between the source and
@@ -305,4 +305,4 @@ void anim_cancel_for_texture(GLuint texture);
 // for their own interpolation (e.g., smooth scrolling, color transitions).
 float anim_ease(EaseType type, float t);
 
-#endif // CRYSTAL_ANIM_H
+#endif // MR_ANIM_H

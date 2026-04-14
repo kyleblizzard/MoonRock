@@ -4,10 +4,10 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Shaders — GLSL shader compilation and management for Crystal
+//  MoonRock Shaders — GLSL shader compilation and management for MoonRock
 // ============================================================================
 //
-// Crystal's rendering pipeline currently uses fixed-function OpenGL calls
+// MoonRock's rendering pipeline currently uses fixed-function OpenGL calls
 // (glBegin/glEnd, glTexCoord2f, etc.). Those work fine for basic textured
 // quads, but they cannot do anything fancy — no blur, no color manipulation,
 // no mesh warping. To add visual effects like blur-behind, genie animations,
@@ -28,7 +28,7 @@
 // What this module provides:
 //   1. Compiling GLSL source code into GPU shader objects.
 //   2. Linking vertex + fragment shaders into complete programs.
-//   3. A set of pre-built shader programs for Crystal's effects.
+//   3. A set of pre-built shader programs for MoonRock's effects.
 //   4. Helper functions to set uniform variables (parameters sent to shaders).
 //   5. A VBO-based quad renderer to replace glBegin/glEnd.
 //   6. FBO (framebuffer object) management for off-screen rendering passes.
@@ -36,13 +36,13 @@
 // Why load from files AND have fallbacks?
 //   Loading shaders from .vert/.frag files makes iteration fast — edit a file,
 //   restart the compositor, see the change. But we also embed fallback shader
-//   source strings in the C code so Crystal still works even if the shader
+//   source strings in the C code so MoonRock still works even if the shader
 //   files are missing (e.g., first install, missing data directory).
 //
 // ============================================================================
 
-#ifndef CRYSTAL_SHADERS_H
-#define CRYSTAL_SHADERS_H
+#ifndef MR_SHADERS_H
+#define MR_SHADERS_H
 
 #include <GL/gl.h>
 #include <stdbool.h>
@@ -79,7 +79,7 @@ typedef struct {
 
 // Initialize all shader programs.
 //
-// This compiles every vertex/fragment shader pair Crystal needs, links them
+// This compiles every vertex/fragment shader pair MoonRock needs, links them
 // into programs, and stores the resulting handles in 'progs'.
 //
 // shader_dir: path to the directory containing .vert and .frag files.
@@ -94,7 +94,7 @@ bool shaders_init(ShaderPrograms *progs, const char *shader_dir);
 // Destroy all shader programs and free GPU resources.
 //
 // After this call, all handles in 'progs' are invalid. Call this during
-// Crystal's shutdown sequence.
+// MoonRock's shutdown sequence.
 void shaders_shutdown(ShaderPrograms *progs);
 
 
@@ -264,7 +264,7 @@ void shaders_ortho(float *matrix, float left, float right,
 // position it using a uniform matrix. This means we only need one VBO for
 // all quad rendering — windows, shadows, blur passes, everything.
 
-// Create the quad VBO and VAO. Call once during Crystal initialization.
+// Create the quad VBO and VAO. Call once during MoonRock initialization.
 void shaders_init_quad_vbo(void);
 
 // Draw a textured quad at the given screen position and size.
@@ -281,7 +281,7 @@ void shaders_draw_quad(float x, float y, float w, float h);
 void shaders_draw_quad_tc(float x, float y, float w, float h,
                           float s0, float t0, float s1, float t1);
 
-// Destroy the quad VBO and VAO. Call during Crystal shutdown.
+// Destroy the quad VBO and VAO. Call during MoonRock shutdown.
 void shaders_shutdown_quad_vbo(void);
 
 
@@ -317,4 +317,4 @@ void shaders_bind_fbo(GLuint fbo);
 // (the screen).
 void shaders_unbind_fbo(void);
 
-#endif // CRYSTAL_SHADERS_H
+#endif // MR_SHADERS_H

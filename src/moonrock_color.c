@@ -4,11 +4,11 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Color — Display scaling, HDR, and color management implementation
+//  MoonRock Color — Display scaling, HDR, and color management implementation
 // ============================================================================
 //
 // This file implements the color management subsystem described in
-// crystal_color.h. It uses XRandR to detect connected displays, computes
+// moonrock_color.h. It uses XRandR to detect connected displays, computes
 // fractional DPI scale factors, provides tone mapping uniforms for HDR
 // shaders, and manages gamma correction.
 //
@@ -39,12 +39,12 @@
 //
 //   GL function pointers:
 //     We load glGetUniformLocation and glUniform1f via glXGetProcAddress,
-//     just like crystal_shaders.c does. We need these to set tone mapping
+//     just like moonrock_shaders.c does. We need these to set tone mapping
 //     uniforms on shader programs.
 //
 // ============================================================================
 
-#include "crystal_color.h"
+#include "moonrock_color.h"
 
 #include <X11/Xlib.h>                  // Display, Window, RootWindow
 #include <X11/extensions/Xrandr.h>     // XRandR — display enumeration
@@ -81,7 +81,7 @@
 // on shader programs. These are OpenGL 2.0 functions that aren't available
 // in the base GL/gl.h header — we load them at runtime from the GPU driver.
 //
-// See crystal_shaders.c for a detailed explanation of why GL functions need
+// See moonrock_shaders.c for a detailed explanation of why GL functions need
 // to be loaded this way.
 
 static PFNGLGETUNIFORMLOCATIONPROC pfn_glGetUniformLocation = NULL;
@@ -123,7 +123,7 @@ static char icc_profile_path[512] = {0};
 //
 // We call glXGetProcAddress() to get the actual function addresses from the
 // GPU driver. This must be done after the GL context is created (which
-// crystal_init() handles before calling color_init()).
+// mr_init() handles before calling color_init()).
 //
 // Returns true if all required functions were found.
 static bool load_gl_functions(void)
@@ -140,7 +140,7 @@ static bool load_gl_functions(void)
 
     // Both functions are required for tone mapping to work
     if (!pfn_glGetUniformLocation || !pfn_glUniform1f) {
-        fprintf(stderr, "[crystal_color] WARNING: Could not load GL uniform "
+        fprintf(stderr, "[moonrock_color] WARNING: Could not load GL uniform "
                 "functions. Tone mapping will be unavailable.\n");
         return false;
     }
@@ -357,7 +357,7 @@ bool color_init(void *dpy, int screen)
     // outputs.
     XRRScreenResources *res = XRRGetScreenResources(d, root);
     if (!res) {
-        fprintf(stderr, "[crystal_color] ERROR: XRRGetScreenResources failed. "
+        fprintf(stderr, "[moonrock_color] ERROR: XRRGetScreenResources failed. "
                 "Cannot detect displays.\n");
         return false;
     }
@@ -473,7 +473,7 @@ bool color_init(void *dpy, int screen)
         di->has_hdr = check_hdr_capable(d, res->outputs[i]);
 
         // Log what we found for debugging
-        fprintf(stderr, "[crystal_color] Display %d: \"%s\" %dx%d @ %dHz, "
+        fprintf(stderr, "[moonrock_color] Display %d: \"%s\" %dx%d @ %dHz, "
                 "%.0f PPI, scale %.2fx%s%s\n",
                 display_count, di->name,
                 di->width_px, di->height_px, di->refresh_hz,
@@ -489,12 +489,12 @@ bool color_init(void *dpy, int screen)
     XRRFreeScreenResources(res);
 
     if (display_count == 0) {
-        fprintf(stderr, "[crystal_color] WARNING: No connected displays found. "
+        fprintf(stderr, "[moonrock_color] WARNING: No connected displays found. "
                 "Scale factor defaults to 1.0x.\n");
         return false;
     }
 
-    fprintf(stderr, "[crystal_color] Initialized: %d display(s), primary "
+    fprintf(stderr, "[moonrock_color] Initialized: %d display(s), primary "
             "scale factor %.2fx\n", display_count, displays[0].scale_factor);
     return true;
 }
@@ -512,7 +512,7 @@ void color_shutdown(void)
     // Reset gamma to sRGB default
     current_gamma = 2.2f;
 
-    fprintf(stderr, "[crystal_color] Shut down.\n");
+    fprintf(stderr, "[moonrock_color] Shut down.\n");
 }
 
 
@@ -647,7 +647,7 @@ void color_set_gamma(float gamma)
 
     // NOTE: We could also set the X11 gamma ramp here using
     // XRRSetCrtcGamma(). That would apply gamma correction to the entire
-    // display output (not just Crystal's rendering), which affects all
+    // display output (not just MoonRock's rendering), which affects all
     // applications. For now we only use the shader-based approach, which
     // is more precise and doesn't interfere with other programs.
     //
@@ -661,7 +661,7 @@ void color_set_gamma(float gamma)
     // and CRTC handles beyond init time, and we need to be careful to restore
     // the original ramp on shutdown.
 
-    fprintf(stderr, "[crystal_color] Gamma set to %.2f\n", gamma);
+    fprintf(stderr, "[moonrock_color] Gamma set to %.2f\n", gamma);
 }
 
 
@@ -678,7 +678,7 @@ float color_get_gamma(void)
 bool color_load_icc_profile(const char *path)
 {
     if (!path) {
-        fprintf(stderr, "[crystal_color] ERROR: NULL ICC profile path.\n");
+        fprintf(stderr, "[moonrock_color] ERROR: NULL ICC profile path.\n");
         return false;
     }
 
@@ -702,7 +702,7 @@ bool color_load_icc_profile(const char *path)
     // Verify the file exists by trying to open it
     FILE *f = fopen(path, "rb");
     if (!f) {
-        fprintf(stderr, "[crystal_color] ERROR: Cannot open ICC profile: %s\n",
+        fprintf(stderr, "[moonrock_color] ERROR: Cannot open ICC profile: %s\n",
                 path);
         return false;
     }
@@ -715,7 +715,7 @@ bool color_load_icc_profile(const char *path)
     fclose(f);
 
     if (read_count < 4) {
-        fprintf(stderr, "[crystal_color] ERROR: ICC profile too small: %s\n",
+        fprintf(stderr, "[moonrock_color] ERROR: ICC profile too small: %s\n",
                 path);
         return false;
     }
@@ -727,7 +727,7 @@ bool color_load_icc_profile(const char *path)
                               | ((unsigned int)header[3]);
 
     if (profile_size < 128) {
-        fprintf(stderr, "[crystal_color] ERROR: ICC profile size too small "
+        fprintf(stderr, "[moonrock_color] ERROR: ICC profile size too small "
                 "(%u bytes): %s\n", profile_size, path);
         return false;
     }
@@ -736,7 +736,7 @@ bool color_load_icc_profile(const char *path)
     strncpy(icc_profile_path, path, sizeof(icc_profile_path) - 1);
     icc_profile_path[sizeof(icc_profile_path) - 1] = '\0';
 
-    fprintf(stderr, "[crystal_color] Loaded ICC profile: %s (%u bytes)\n",
+    fprintf(stderr, "[moonrock_color] Loaded ICC profile: %s (%u bytes)\n",
             path, profile_size);
     return true;
 }

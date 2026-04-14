@@ -1,4 +1,4 @@
-# Crystal Compositor — Standalone Build
+# MoonRock Compositor — Standalone Build
 # Copyright (c) 2026 Kyle Blizzard. All Rights Reserved.
 #
 # Build:
@@ -9,12 +9,12 @@
 #   ninja -C builddir install
 #
 # This produces:
-#   - libcrystal.so       — shared library for window managers to link against
-#   - crystal_api.h       — the only header a WM needs to include
-#   - crystal.pc          — pkg-config file for dependency discovery
-#   - shaders/*           — GLSL shader files installed to datadir/crystal/shaders
+#   - libmoonrock.so       — shared library for window managers to link against
+#   - moonrock_api.h       — the only header a WM needs to include
+#   - moonrock.pc          — pkg-config file for dependency discovery
+#   - shaders/*           — GLSL shader files installed to datadir/moonrock/shaders
 
-project('crystal', 'c',
+project('moonrock', 'c',
   version: '0.1.0',
   license: 'Proprietary',
   default_options: [
@@ -57,28 +57,28 @@ dl_dep = cc.find_library('dl', required: true)
 # xext covers this on most systems
 
 # ── Source files ────────────────────────────────────────────────────────
-crystal_sources = [
-  'src/crystal.c',
-  'src/crystal_api.c',
-  'src/crystal_shaders.c',
-  'src/crystal_anim.c',
-  'src/crystal_mission_control.c',
-  'src/crystal_touch.c',
-  'src/crystal_display.c',
-  'src/crystal_color.c',
-  'src/crystal_plugin.c',
-  'src/crystal_robust.c',
+moonrock_sources = [
+  'src/moonrock.c',
+  'src/moonrock_api.c',
+  'src/moonrock_shaders.c',
+  'src/moonrock_anim.c',
+  'src/moonrock_mission_control.c',
+  'src/moonrock_touch.c',
+  'src/moonrock_display.c',
+  'src/moonrock_color.c',
+  'src/moonrock_plugin.c',
+  'src/moonrock_robust.c',
   'src/wm_compat.c',
 ]
 
 # ── Include directories ────────────────────────────────────────────────
-# The include/ directory contains all Crystal headers (public + internal).
-crystal_inc = include_directories('include')
+# The include/ directory contains all MoonRock headers (public + internal).
+moonrock_inc = include_directories('include')
 
 # ── Build the shared library ───────────────────────────────────────────
-crystal_lib = library('crystal',
-  crystal_sources,
-  include_directories: crystal_inc,
+moonrock_lib = library('moonrock',
+  moonrock_sources,
+  include_directories: moonrock_inc,
   dependencies: [
     x11_dep,
     xcomposite_dep,
@@ -97,13 +97,13 @@ crystal_lib = library('crystal',
 )
 
 # ── Install public header ──────────────────────────────────────────────
-# Only crystal_api.h is the public API. Internal headers stay in the
+# Only moonrock_api.h is the public API. Internal headers stay in the
 # source tree but aren't installed — they're implementation details.
-install_headers('include/crystal_api.h')
+install_headers('include/moonrock_api.h')
 
 # ── Install GLSL shaders ──────────────────────────────────────────────
-# Shaders are installed to $prefix/share/crystal/shaders/ so the library
-# can find them at runtime. The embedded fallback shaders in crystal_shaders.c
+# Shaders are installed to $prefix/share/moonrock/shaders/ so the library
+# can find them at runtime. The embedded fallback shaders in moonrock_shaders.c
 # mean these aren't strictly required, but having them on disk allows
 # users to edit shaders without recompiling.
 install_data(
@@ -111,25 +111,25 @@ install_data(
   'shaders/basic.frag',
   'shaders/blur.frag',
   'shaders/shadow.frag',
-  install_dir: get_option('datadir') / 'crystal' / 'shaders',
+  install_dir: get_option('datadir') / 'moonrock' / 'shaders',
 )
 
 # ── pkg-config ─────────────────────────────────────────────────────────
-# Generate a .pc file so other projects can find Crystal with:
-#   dependency('crystal')  (in meson)
-#   pkg-config --cflags --libs crystal  (in makefiles)
+# Generate a .pc file so other projects can find MoonRock with:
+#   dependency('moonrock')  (in meson)
+#   pkg-config --cflags --libs moonrock  (in makefiles)
 pkg = import('pkgconfig')
 pkg.generate(
-  crystal_lib,
-  name: 'crystal',
-  description: 'Crystal Compositor — X11 OpenGL compositing engine',
+  moonrock_lib,
+  name: 'moonrock',
+  description: 'MoonRock Compositor — X11 OpenGL compositing engine',
   version: meson.project_version(),
 )
 
 # ── Declare dependency for subproject use ──────────────────────────────
-# If another meson project includes Crystal as a subproject, they can use:
-#   crystal_dep = subproject('crystal').get_variable('crystal_dep')
-crystal_dep = declare_dependency(
-  link_with: crystal_lib,
-  include_directories: crystal_inc,
+# If another meson project includes MoonRock as a subproject, they can use:
+#   moonrock_dep = subproject('moonrock').get_variable('moonrock_dep')
+moonrock_dep = declare_dependency(
+  link_with: moonrock_lib,
+  include_directories: moonrock_inc,
 )

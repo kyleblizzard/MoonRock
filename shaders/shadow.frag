@@ -14,7 +14,7 @@
 //   is an alpha-only image where brighter pixels = more shadow opacity.
 //   We sample the alpha and output black with that alpha level.
 //
-// How it fits into Crystal Compositor:
+// How it fits into MoonRock Compositor:
 //   Window shadows are generated once (on window map or resize) by blurring
 //   a white rectangle through the blur shader + FBO pipeline. The result is
 //   a texture where the alpha channel encodes the shadow falloff — fully

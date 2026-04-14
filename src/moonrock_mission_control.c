@@ -4,13 +4,13 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Mission Control — unified Expose + Spaces overview (macOS 10.7)
+//  MoonRock Mission Control — unified Expose + Spaces overview (macOS 10.7)
 // ============================================================================
 //
 // This file implements the Mission Control overlay: the bird's-eye view that
 // shows all windows tiled in a grid with desktop thumbnails at the top.
 //
-// See crystal_mission_control.h for the full design overview.
+// See moonrock_mission_control.h for the full design overview.
 //
 // ============================================================================
 
@@ -18,10 +18,10 @@
 // with CLOCK_MONOTONIC for high-resolution timing.
 #define _GNU_SOURCE
 
-#include "crystal_mission_control.h"
-#include "crystal_anim.h"
-#include "crystal_shaders.h"
-#include "crystal.h"
+#include "moonrock_mission_control.h"
+#include "moonrock_anim.h"
+#include "moonrock_shaders.h"
+#include "moonrock.h"
 
 #include <GL/glext.h>       // GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, etc.
 #include <math.h>
@@ -145,7 +145,7 @@ static void mc_ensure_thumbnails(AuraWM *wm);
 //  Initialization and shutdown
 // ============================================================================
 
-// Initialize Mission Control. Called once during Crystal startup.
+// Initialize Mission Control. Called once during MoonRock startup.
 //
 // Creates the first Space ("Desktop 1") and assigns every currently mapped
 // window to it. All animation and hover state is zeroed out.
@@ -310,16 +310,16 @@ void mc_enter(AuraWM *wm)
         mc.tiled_windows[idx].orig_w = (float)c->w;
         mc.tiled_windows[idx].orig_h = (float)c->h;
 
-        // Look up the GL texture for this window. Crystal created the texture
-        // when the window was first mapped (crystal_window_mapped). We retrieve
-        // it by the frame window ID since that's what Crystal binds textures to.
+        // Look up the GL texture for this window. MoonRock created the texture
+        // when the window was first mapped (mr_window_mapped). We retrieve
+        // it by the frame window ID since that's what MoonRock binds textures to.
         // If the window has no texture yet (e.g., it was just created), we get
         // 0 back, which mc_draw() handles by showing a placeholder rectangle.
-        GLuint tex = crystal_get_window_texture_id(c->frame);
+        GLuint tex = mr_get_window_texture_id(c->frame);
         if (tex == 0) {
             // Fall back to the client window ID — some windows may be tracked
             // by their client window rather than the frame.
-            tex = crystal_get_window_texture_id(c->client);
+            tex = mr_get_window_texture_id(c->client);
         }
         mc.tiled_windows[idx].texture = tex;
     }
@@ -511,8 +511,8 @@ static void mc_render_space_thumbnail(AuraWM *wm, int space_index)
 {
     MCSpace *space = &mc.spaces[space_index];
 
-    // Get the shader programs and projection from Crystal's compositor.
-    ShaderPrograms *progs = crystal_get_shaders();
+    // Get the shader programs and projection from MoonRock's compositor.
+    ShaderPrograms *progs = mr_get_shaders();
     if (!progs || !progs->basic) return;  // Shaders not ready yet
 
     // Create the shared FBO on first use. All thumbnails share the same FBO
@@ -560,9 +560,9 @@ static void mc_render_space_thumbnail(AuraWM *wm, int space_index)
         Client *c = wm_find_client(wm, space->windows[i]);
         if (!c) continue;
 
-        // Look up the window's GL texture from Crystal's texture cache.
-        GLuint tex = crystal_get_window_texture_id(c->frame);
-        if (tex == 0) tex = crystal_get_window_texture_id(c->client);
+        // Look up the window's GL texture from MoonRock's texture cache.
+        GLuint tex = mr_get_window_texture_id(c->frame);
+        if (tex == 0) tex = mr_get_window_texture_id(c->client);
 
         if (tex != 0) {
             // Draw the window texture at its real screen coordinates.
@@ -769,7 +769,7 @@ static void draw_space_thumbnails(AuraWM *wm, GLuint shader, float *projection,
 
 // Draw the full Mission Control overlay.
 //
-// This is the main drawing function, called from crystal_composite() when
+// This is the main drawing function, called from mr_composite() when
 // Mission Control is visible or animating. It layers the overlay on top of
 // the normal desktop:
 //   1. Dark semi-transparent backdrop (dims the wallpaper).
@@ -790,7 +790,7 @@ void mc_draw(AuraWM *wm, GLuint basic_shader, float *projection)
     if (t < 0.0f) t = 0.0f;
 
     // Apply cubic ease-in-out for a smooth acceleration/deceleration.
-    // This uses the same easing function as the Crystal animation framework.
+    // This uses the same easing function as the MoonRock animation framework.
     float ease = anim_ease(EASE_IN_OUT_CUBIC, t);
 
     // When exiting, reverse the easing so the animation plays backward

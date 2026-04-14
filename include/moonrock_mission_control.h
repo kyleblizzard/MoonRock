@@ -4,7 +4,7 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Mission Control — unified Expose + Spaces overview (macOS 10.7)
+//  MoonRock Mission Control — unified Expose + Spaces overview (macOS 10.7)
 // ============================================================================
 //
 // Mission Control is the bird's-eye view of your desktop. When triggered
@@ -18,7 +18,7 @@
 //   - Click a Space thumbnail to switch to that desktop.
 //   - Press Escape or click empty space to return to normal view.
 //
-// The enter/exit transitions are animated over 0.3 seconds using the Crystal
+// The enter/exit transitions are animated over 0.3 seconds using the MoonRock
 // animation framework's easing functions. Windows smoothly interpolate between
 // their real positions and their tiled grid positions.
 //
@@ -30,8 +30,8 @@
 //
 // ============================================================================
 
-#ifndef CRYSTAL_MISSION_CONTROL_H
-#define CRYSTAL_MISSION_CONTROL_H
+#ifndef MR_MISSION_CONTROL_H
+#define MR_MISSION_CONTROL_H
 
 #include "wm_compat.h"
 #include <stdbool.h>
@@ -105,7 +105,7 @@ typedef struct {
 //  Initialization and shutdown
 // ============================================================================
 
-// Initialize Mission Control. Call once during Crystal startup.
+// Initialize Mission Control. Call once during MoonRock startup.
 //
 // Sets up the initial Space ("Desktop 1"), assigns all existing windows to it,
 // and zeroes out all state. Does NOT activate Mission Control — that happens
@@ -115,7 +115,7 @@ void mc_init(AuraWM *wm);
 // Shut down Mission Control and free all resources.
 //
 // Frees the window arrays in each Space and releases any thumbnail textures.
-// Call during Crystal shutdown.
+// Call during MoonRock shutdown.
 void mc_shutdown(AuraWM *wm);
 
 
@@ -166,7 +166,7 @@ bool mc_update(AuraWM *wm);
 
 // Draw the Mission Control overlay.
 //
-// This is called from crystal_composite() when Mission Control is active or
+// This is called from mr_composite() when Mission Control is active or
 // animating. It draws:
 //   1. A semi-transparent dark overlay (dims the wallpaper).
 //   2. Space thumbnails along the top of the screen.
@@ -256,4 +256,4 @@ void mc_move_window_to_space(AuraWM *wm, Window win, int space_id);
 // Call this from the WM's UnmapNotify / DestroyNotify handler.
 void mc_notify_window_unmapped(Window win);
 
-#endif // CRYSTAL_MISSION_CONTROL_H
+#endif // MR_MISSION_CONTROL_H

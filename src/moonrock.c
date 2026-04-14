@@ -3,10 +3,10 @@
 // Unauthorized copying, forking, or distribution of this file,
 // via any medium, is strictly prohibited.
 //
-// AuraOS — Crystal Compositor (Phase 1)
+// AuraOS — MoonRock Compositor (Phase 1)
 //
-// Crystal is AuraOS's built-in OpenGL compositor, replacing picom. Instead of
-// relying on an external program to composite windows, Crystal handles it
+// MoonRock is AuraOS's built-in OpenGL compositor, replacing picom. Instead of
+// relying on an external program to composite windows, MoonRock handles it
 // directly inside the window manager using OpenGL for GPU-accelerated rendering.
 //
 // How compositing works at a high level:
@@ -17,7 +17,7 @@
 //   like stacking transparencies), adds effects like shadows, and draws the
 //   final combined image to the screen.
 //
-// Crystal's approach:
+// MoonRock's approach:
 //   1. XComposite redirects all windows to off-screen pixmaps (Manual mode —
 //      we handle ALL rendering, unlike the old compositor's Automatic mode).
 //   2. Each window's pixmap is bound as an OpenGL texture using the
@@ -31,14 +31,14 @@
 //      preventing screen tearing.
 
 #define _GNU_SOURCE  // Needed for M_PI from <math.h>
-#include "crystal.h"
+#include "moonrock.h"
 
 // ── Custom X11 error handler ──
 // X11's default error handler calls exit(), which kills the compositor if a
 // window is destroyed between our check and our X call (a common race).
 // This handler catches the expected transient errors (BadWindow, BadMatch,
 // BadDrawable) and logs them instead of crashing.
-static int crystal_x11_error_handler(Display *dpy, XErrorEvent *event)
+static int mr_x11_error_handler(Display *dpy, XErrorEvent *event)
 {
     (void)dpy;  // unused — we just log and continue
 
@@ -48,21 +48,21 @@ static int crystal_x11_error_handler(Display *dpy, XErrorEvent *event)
     // Log them but don't crash.
     if (event->error_code == BadWindow || event->error_code == BadMatch ||
         event->error_code == BadDrawable) {
-        fprintf(stderr, "[crystal] X11 error (ignored): code=%d, xid=0x%lx, op=%d\n",
+        fprintf(stderr, "[moonrock] X11 error (ignored): code=%d, xid=0x%lx, op=%d\n",
                 event->error_code, event->resourceid, event->request_code);
         return 0;
     }
-    fprintf(stderr, "[crystal] X11 error: code=%d, xid=0x%lx, op=%d\n",
+    fprintf(stderr, "[moonrock] X11 error: code=%d, xid=0x%lx, op=%d\n",
             event->error_code, event->resourceid, event->request_code);
     return 0;
 }
-#include "crystal_shaders.h"
-#include "crystal_display.h"
-#include "crystal_plugin.h"
+#include "moonrock_shaders.h"
+#include "moonrock_display.h"
+#include "moonrock_plugin.h"
 #include "ewmh.h"
 
 // Forward declaration removed — compositor.c is no longer linked.
-// crystal_create_argb_visual() now handles fallback internally.
+// mr_create_argb_visual() now handles fallback internally.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -145,21 +145,21 @@ struct WindowTexture {
 // SECTION: Module state (file-scope static)
 // ────────────────────────────────────────────────────────────────────────
 //
-// All Crystal state lives in this single struct. Using a static struct at
-// file scope means only crystal.c can access it, keeping the compositor's
+// All MoonRock state lives in this single struct. Using a static struct at
+// file scope means only moonrock.c can access it, keeping the compositor's
 // internals private from the rest of the window manager.
 
 // Global flag indicating whether compositing is active. In AuraOS this is
-// defined in decor.c and shared with frame.c. In standalone Crystal we
+// defined in decor.c and shared with frame.c. In standalone MoonRock we
 // define it here since there is no external WM module providing it.
-#if !defined(CRYSTAL_EMBEDDED_IN_WM)
+#if !defined(MR_EMBEDDED_IN_WM)
 bool compositor_active = false;
 #else
 extern bool compositor_active;
 #endif
 
 static struct {
-    bool active;                    // Is Crystal initialized and running?
+    bool active;                    // Is MoonRock initialized and running?
 
     // ── GLX / OpenGL context ──
     // A "GLX context" is the bridge between X11 and OpenGL. It holds all
@@ -225,7 +225,7 @@ static struct {
     // 4x4 orthographic projection computed once per frame and passed to
     // every shader program as the u_projection uniform.
     float projection[16];
-} crystal;
+} moonrock;
 
 // ────────────────────────────────────────────────────────────────────────
 // SECTION: Forward declarations (private helper functions)
@@ -277,14 +277,14 @@ static bool choose_fb_configs(Display *dpy, int screen)
     int num_configs = 0;
     GLXFBConfig *configs = glXChooseFBConfig(dpy, screen, render_attrs, &num_configs);
     if (!configs || num_configs == 0) {
-        fprintf(stderr, "[crystal] ERROR: No suitable FBConfig for rendering\n");
+        fprintf(stderr, "[moonrock] ERROR: No suitable FBConfig for rendering\n");
         if (configs) XFree(configs);
         return false;
     }
 
     // Take the first matching config — the X server returns them sorted by
     // preference (fewest extra features first, best match at index 0).
-    crystal.fb_config = configs[0];
+    moonrock.fb_config = configs[0];
     XFree(configs);
 
     // ── Pixmap FBConfig (RGBA — for 32-bit windows with alpha) ──
@@ -304,10 +304,10 @@ static bool choose_fb_configs(Display *dpy, int screen)
 
     configs = glXChooseFBConfig(dpy, screen, pixmap_attrs_rgba, &num_configs);
     if (configs && num_configs > 0) {
-        crystal.pixmap_fb_config = configs[0];
+        moonrock.pixmap_fb_config = configs[0];
         XFree(configs);
     } else {
-        fprintf(stderr, "[crystal] WARNING: No FBConfig for RGBA pixmap binding\n");
+        fprintf(stderr, "[moonrock] WARNING: No FBConfig for RGBA pixmap binding\n");
         if (configs) XFree(configs);
         // Not fatal — we'll fall back to CPU texture upload
     }
@@ -325,10 +325,10 @@ static bool choose_fb_configs(Display *dpy, int screen)
 
     configs = glXChooseFBConfig(dpy, screen, pixmap_attrs_rgb, &num_configs);
     if (configs && num_configs > 0) {
-        crystal.pixmap_fb_config_rgb = configs[0];
+        moonrock.pixmap_fb_config_rgb = configs[0];
         XFree(configs);
     } else {
-        fprintf(stderr, "[crystal] WARNING: No FBConfig for RGB pixmap binding\n");
+        fprintf(stderr, "[moonrock] WARNING: No FBConfig for RGB pixmap binding\n");
         if (configs) XFree(configs);
     }
 
@@ -352,7 +352,7 @@ static bool load_glx_extensions(Display *dpy, int screen)
     // extensions supported by this driver. We search it for the ones we need.
     const char *exts = glXQueryExtensionsString(dpy, screen);
     if (!exts) {
-        fprintf(stderr, "[crystal] WARNING: Cannot query GLX extensions\n");
+        fprintf(stderr, "[moonrock] WARNING: Cannot query GLX extensions\n");
         return false;
     }
 
@@ -371,15 +371,15 @@ static bool load_glx_extensions(Display *dpy, int screen)
 
         // Both functions must be present for the extension to work
         if (glXBindTexImageEXT_func && glXReleaseTexImageEXT_func) {
-            crystal.has_texture_from_pixmap = true;
-            fprintf(stderr, "[crystal] GLX_EXT_texture_from_pixmap available "
+            moonrock.has_texture_from_pixmap = true;
+            fprintf(stderr, "[moonrock] GLX_EXT_texture_from_pixmap available "
                     "(fast path)\n");
         } else {
-            fprintf(stderr, "[crystal] WARNING: texture_from_pixmap functions "
+            fprintf(stderr, "[moonrock] WARNING: texture_from_pixmap functions "
                     "not loadable\n");
         }
     } else {
-        fprintf(stderr, "[crystal] GLX_EXT_texture_from_pixmap NOT available "
+        fprintf(stderr, "[moonrock] GLX_EXT_texture_from_pixmap NOT available "
                 "(using CPU fallback)\n");
     }
 
@@ -392,7 +392,7 @@ static bool load_glx_extensions(Display *dpy, int screen)
         glXSwapIntervalEXT_func = (PFNGLXSWAPINTERVALEXTPROC)
             glXGetProcAddress((const GLubyte *)"glXSwapIntervalEXT");
         if (glXSwapIntervalEXT_func) {
-            fprintf(stderr, "[crystal] GLX_EXT_swap_control available (VSync)\n");
+            fprintf(stderr, "[moonrock] GLX_EXT_swap_control available (VSync)\n");
         }
     }
 
@@ -404,7 +404,7 @@ static bool load_glx_extensions(Display *dpy, int screen)
 // ────────────────────────────────────────────────────────────────────────
 //
 // This is the same logic as compositor_create_argb_visual() from the old
-// compositor, but stored in Crystal's state. We need a 32-bit visual with
+// compositor, but stored in MoonRock's state. We need a 32-bit visual with
 // an alpha channel so frame windows can have semi-transparent shadow regions.
 
 static bool find_argb_visual(AuraWM *wm)
@@ -429,12 +429,12 @@ static bool find_argb_visual(AuraWM *wm)
     }
 
     // Use the first match (usually there's exactly one 32-bit TrueColor visual)
-    crystal.argb_visual = visuals[0].visual;
+    moonrock.argb_visual = visuals[0].visual;
 
     // Every visual needs a colormap (X11 requirement). AllocNone means
     // "don't reserve any color cells" — it's just a formality for TrueColor.
-    crystal.argb_colormap = XCreateColormap(wm->dpy, wm->root,
-                                             crystal.argb_visual, AllocNone);
+    moonrock.argb_colormap = XCreateColormap(wm->dpy, wm->root,
+                                             moonrock.argb_visual, AllocNone);
 
     XFree(visuals);
     return true;
@@ -444,27 +444,27 @@ static bool find_argb_visual(AuraWM *wm)
 // SECTION: Initialization
 // ────────────────────────────────────────────────────────────────────────
 
-bool crystal_init(AuraWM *wm)
+bool mr_init(AuraWM *wm)
 {
     if (!wm || !wm->dpy) return false;
 
     // Zero out all state so we start clean
-    memset(&crystal, 0, sizeof(crystal));
+    memset(&moonrock, 0, sizeof(moonrock));
 
     // Default background color — a dark neutral gray. This is what you see
     // behind all windows if there's no wallpaper.
-    crystal.bg_r = 0.15f;
-    crystal.bg_g = 0.15f;
-    crystal.bg_b = 0.18f;
+    moonrock.bg_r = 0.15f;
+    moonrock.bg_g = 0.15f;
+    moonrock.bg_b = 0.18f;
 
-    fprintf(stderr, "[crystal] Initializing Crystal Compositor...\n");
+    fprintf(stderr, "[moonrock] Initializing MoonRock Compositor...\n");
 
     // ── Step 1: Check for GLX extension ──
     // GLX is the glue between X11 and OpenGL. Without it, we can't do any
     // GPU-accelerated rendering at all.
     int glx_error_base, glx_event_base;
     if (!glXQueryExtension(wm->dpy, &glx_error_base, &glx_event_base)) {
-        fprintf(stderr, "[crystal] ERROR: GLX extension not available. "
+        fprintf(stderr, "[moonrock] ERROR: GLX extension not available. "
                 "Cannot initialize OpenGL compositor.\n");
         return false;
     }
@@ -472,13 +472,13 @@ bool crystal_init(AuraWM *wm)
     // Check GLX version — we need at least 1.3 for FBConfig support
     int glx_major = 0, glx_minor = 0;
     if (!glXQueryVersion(wm->dpy, &glx_major, &glx_minor)) {
-        fprintf(stderr, "[crystal] ERROR: Cannot query GLX version\n");
+        fprintf(stderr, "[moonrock] ERROR: Cannot query GLX version\n");
         return false;
     }
-    fprintf(stderr, "[crystal] GLX version: %d.%d\n", glx_major, glx_minor);
+    fprintf(stderr, "[moonrock] GLX version: %d.%d\n", glx_major, glx_minor);
 
     if (glx_major < 1 || (glx_major == 1 && glx_minor < 3)) {
-        fprintf(stderr, "[crystal] ERROR: GLX 1.3+ required, got %d.%d\n",
+        fprintf(stderr, "[moonrock] ERROR: GLX 1.3+ required, got %d.%d\n",
                 glx_major, glx_minor);
         return false;
     }
@@ -488,73 +488,73 @@ bool crystal_init(AuraWM *wm)
     // We need version 0.2+ for XCompositeNameWindowPixmap().
     int composite_major = 0, composite_minor = 0;
     if (!XCompositeQueryVersion(wm->dpy, &composite_major, &composite_minor)) {
-        fprintf(stderr, "[crystal] ERROR: XComposite not available\n");
+        fprintf(stderr, "[moonrock] ERROR: XComposite not available\n");
         return false;
     }
     if (composite_major == 0 && composite_minor < 2) {
-        fprintf(stderr, "[crystal] ERROR: XComposite 0.2+ required, got %d.%d\n",
+        fprintf(stderr, "[moonrock] ERROR: XComposite 0.2+ required, got %d.%d\n",
                 composite_major, composite_minor);
         return false;
     }
-    fprintf(stderr, "[crystal] XComposite %d.%d\n", composite_major, composite_minor);
+    fprintf(stderr, "[moonrock] XComposite %d.%d\n", composite_major, composite_minor);
 
     // ── Step 3: Check for XDamage ──
     // XDamage tells us when a window's contents have changed, so we only
     // refresh textures that actually need updating (not every window every frame).
     int damage_major = 0, damage_minor = 0;
     if (!XDamageQueryVersion(wm->dpy, &damage_major, &damage_minor)) {
-        fprintf(stderr, "[crystal] ERROR: XDamage not available\n");
+        fprintf(stderr, "[moonrock] ERROR: XDamage not available\n");
         return false;
     }
     // Store the event base — we need it to identify DamageNotify events
-    XDamageQueryExtension(wm->dpy, &crystal.damage_event_base,
-                          &crystal.damage_error_base);
-    fprintf(stderr, "[crystal] XDamage %d.%d (event base: %d)\n",
-            damage_major, damage_minor, crystal.damage_event_base);
+    XDamageQueryExtension(wm->dpy, &moonrock.damage_event_base,
+                          &moonrock.damage_error_base);
+    fprintf(stderr, "[moonrock] XDamage %d.%d (event base: %d)\n",
+            damage_major, damage_minor, moonrock.damage_event_base);
 
     // ── Step 4: Check for XFixes ──
     // XFixes provides input shape manipulation — we use it to make shadow
     // regions click-through (clicks pass to windows behind them).
     int fixes_major = 0, fixes_minor = 0;
     if (!XFixesQueryVersion(wm->dpy, &fixes_major, &fixes_minor)) {
-        fprintf(stderr, "[crystal] ERROR: XFixes not available\n");
+        fprintf(stderr, "[moonrock] ERROR: XFixes not available\n");
         return false;
     }
-    fprintf(stderr, "[crystal] XFixes %d.%d\n", fixes_major, fixes_minor);
+    fprintf(stderr, "[moonrock] XFixes %d.%d\n", fixes_major, fixes_minor);
 
     // ── Step 5: Choose FBConfigs ──
     // FBConfigs describe pixel formats. We need configs for both rendering
     // (the output surface) and pixmap binding (input textures from windows).
     if (!choose_fb_configs(wm->dpy, wm->screen)) {
-        fprintf(stderr, "[crystal] ERROR: Cannot find suitable FBConfigs\n");
+        fprintf(stderr, "[moonrock] ERROR: Cannot find suitable FBConfigs\n");
         return false;
     }
-    fprintf(stderr, "[crystal] FBConfigs selected\n");
+    fprintf(stderr, "[moonrock] FBConfigs selected\n");
 
     // ── Step 6: Create GLX context ──
     // A GLX context holds all OpenGL state. We create it from our rendering
     // FBConfig, then "make it current" so GL calls go to this context.
     // NULL = no shared context (we only have one).
     // True = direct rendering (bypass X server for GL calls — much faster).
-    crystal.gl_context = glXCreateNewContext(wm->dpy, crystal.fb_config,
+    moonrock.gl_context = glXCreateNewContext(wm->dpy, moonrock.fb_config,
                                              GLX_RGBA_TYPE, NULL, True);
-    if (!crystal.gl_context) {
-        fprintf(stderr, "[crystal] ERROR: Cannot create GLX context\n");
+    if (!moonrock.gl_context) {
+        fprintf(stderr, "[moonrock] ERROR: Cannot create GLX context\n");
         return false;
     }
-    fprintf(stderr, "[crystal] GLX context created (direct: %s)\n",
-            glXIsDirect(wm->dpy, crystal.gl_context) ? "yes" : "no");
+    fprintf(stderr, "[moonrock] GLX context created (direct: %s)\n",
+            glXIsDirect(wm->dpy, moonrock.gl_context) ? "yes" : "no");
 
     // ── Step 7: Create a GLX window from the root window ──
     // We can't render directly to an X window — we need a GLX wrapper.
     // This creates a GLX drawable backed by the root window, which is where
     // our composited output will appear.
-    crystal.gl_window = glXCreateWindow(wm->dpy, crystal.fb_config,
+    moonrock.gl_window = glXCreateWindow(wm->dpy, moonrock.fb_config,
                                          wm->root, NULL);
-    if (!crystal.gl_window) {
-        fprintf(stderr, "[crystal] ERROR: Cannot create GLX window\n");
-        glXDestroyContext(wm->dpy, crystal.gl_context);
-        crystal.gl_context = NULL;
+    if (!moonrock.gl_window) {
+        fprintf(stderr, "[moonrock] ERROR: Cannot create GLX window\n");
+        glXDestroyContext(wm->dpy, moonrock.gl_context);
+        moonrock.gl_context = NULL;
         return false;
     }
 
@@ -562,13 +562,13 @@ bool crystal_init(AuraWM *wm)
     // "Making current" binds the GLX context to the current thread and the
     // GLX window. All subsequent OpenGL calls will render to this window
     // through this context. Think of it as "activating" the context.
-    if (!glXMakeContextCurrent(wm->dpy, crystal.gl_window, crystal.gl_window,
-                                crystal.gl_context)) {
-        fprintf(stderr, "[crystal] ERROR: Cannot make GLX context current\n");
-        glXDestroyWindow(wm->dpy, crystal.gl_window);
-        glXDestroyContext(wm->dpy, crystal.gl_context);
-        crystal.gl_window = 0;
-        crystal.gl_context = NULL;
+    if (!glXMakeContextCurrent(wm->dpy, moonrock.gl_window, moonrock.gl_window,
+                                moonrock.gl_context)) {
+        fprintf(stderr, "[moonrock] ERROR: Cannot make GLX context current\n");
+        glXDestroyWindow(wm->dpy, moonrock.gl_window);
+        glXDestroyContext(wm->dpy, moonrock.gl_context);
+        moonrock.gl_window = 0;
+        moonrock.gl_context = NULL;
         return false;
     }
 
@@ -580,10 +580,10 @@ bool crystal_init(AuraWM *wm)
     // screen where one frame ends and the next begins. VSync synchronizes
     // buffer swaps with the monitor's refresh rate.
     if (glXSwapIntervalEXT_func) {
-        glXSwapIntervalEXT_func(wm->dpy, crystal.gl_window, 1);
-        fprintf(stderr, "[crystal] VSync enabled (swap interval = 1)\n");
+        glXSwapIntervalEXT_func(wm->dpy, moonrock.gl_window, 1);
+        fprintf(stderr, "[moonrock] VSync enabled (swap interval = 1)\n");
     } else {
-        fprintf(stderr, "[crystal] WARNING: VSync not available "
+        fprintf(stderr, "[moonrock] WARNING: VSync not available "
                 "(may see tearing)\n");
     }
 
@@ -591,38 +591,38 @@ bool crystal_init(AuraWM *wm)
     // Must be set before any X calls that could race with window destruction
     // (especially XComposite redirect below). Without this, a BadWindow during
     // normal window lifecycle would invoke the default handler and exit().
-    XSetErrorHandler(crystal_x11_error_handler);
-    fprintf(stderr, "[crystal] Custom X11 error handler installed\n");
+    XSetErrorHandler(mr_x11_error_handler);
+    fprintf(stderr, "[moonrock] Custom X11 error handler installed\n");
 
     // ── Step 11: Set up XComposite redirection ──
-    // Manual mode: Crystal is responsible for compositing all window contents
+    // Manual mode: MoonRock is responsible for compositing all window contents
     // onto the screen. Windows are redirected to off-screen pixmaps, and
-    // crystal_composite() draws them via OpenGL each frame.
+    // mr_composite() draws them via OpenGL each frame.
     XCompositeRedirectSubwindows(wm->dpy, wm->root, CompositeRedirectManual);
-    fprintf(stderr, "[crystal] XComposite redirect set (MANUAL mode — Crystal compositing)\n");
+    fprintf(stderr, "[moonrock] XComposite redirect set (MANUAL mode — MoonRock compositing)\n");
 
     // ── Step 12: Find ARGB visual ──
     // Needed for frame windows that want semi-transparent shadow regions.
     if (find_argb_visual(wm)) {
-        fprintf(stderr, "[crystal] Found 32-bit ARGB visual\n");
+        fprintf(stderr, "[moonrock] Found 32-bit ARGB visual\n");
     } else {
-        fprintf(stderr, "[crystal] WARNING: No 32-bit ARGB visual "
+        fprintf(stderr, "[moonrock] WARNING: No 32-bit ARGB visual "
                 "(shadows may not render correctly)\n");
     }
 
     // ── Step 13: Store screen dimensions ──
-    crystal.root_w = wm->root_w;
-    crystal.root_h = wm->root_h;
+    moonrock.root_w = wm->root_w;
+    moonrock.root_h = wm->root_h;
 
     // ── Step 14: Initialize OpenGL state ──
     //
     // OpenGL is a state machine — you set modes (like blending, texturing)
     // and they stay active until you change them. Here we set up the initial
-    // state that Crystal needs.
+    // state that MoonRock needs.
 
     // Set the "clear color" — the background that shows through when no
     // windows cover a region. This fills the screen before we draw anything.
-    glClearColor(crystal.bg_r, crystal.bg_g, crystal.bg_b, 1.0f);
+    glClearColor(moonrock.bg_r, moonrock.bg_g, moonrock.bg_b, 1.0f);
 
     // Enable 2D texturing — required for drawing window contents as textures
     // on quads. When disabled, quads are drawn as solid colors.
@@ -661,7 +661,7 @@ bool crystal_init(AuraWM *wm)
     // GL_PROJECTION is the "lens" of our virtual camera.
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    glOrtho(0, crystal.root_w, crystal.root_h, 0, -1, 1);
+    glOrtho(0, moonrock.root_w, moonrock.root_h, 0, -1, 1);
 
     // GL_MODELVIEW positions objects in the scene. We start with identity
     // (no transformation) since our coordinates are already in screen space.
@@ -676,21 +676,21 @@ bool crystal_init(AuraWM *wm)
     //
     // Load and compile all GLSL shader programs (basic, blur, shadow, genie).
     // This replaces the fixed-function glBegin/glEnd pipeline with modern
-    // programmable shaders that run on the GPU. Every visual effect Crystal
+    // programmable shaders that run on the GPU. Every visual effect MoonRock
     // renders flows through these shader programs.
     //
     // shader_dir can be NULL — embedded fallback shaders are compiled into
-    // crystal_shaders.c so the compositor works even without shader files.
-    if (!shaders_init(&crystal.shaders, NULL)) {
-        fprintf(stderr, "[crystal] WARNING: Shader initialization failed, "
+    // moonrock_shaders.c so the compositor works even without shader files.
+    if (!shaders_init(&moonrock.shaders, NULL)) {
+        fprintf(stderr, "[moonrock] WARNING: Shader initialization failed, "
                 "falling back to fixed-function GL\n");
         // We continue anyway — the compositor can still work with shaders.basic=0
         // by falling back to fixed-function for individual draw calls.
     } else {
-        fprintf(stderr, "[crystal] Shader pipeline initialized "
+        fprintf(stderr, "[moonrock] Shader pipeline initialized "
                 "(basic=%u, blur_h=%u, blur_v=%u, shadow=%u)\n",
-                crystal.shaders.basic, crystal.shaders.blur_h,
-                crystal.shaders.blur_v, crystal.shaders.shadow);
+                moonrock.shaders.basic, moonrock.shaders.blur_h,
+                moonrock.shaders.blur_v, moonrock.shaders.shadow);
     }
 
     // Create the VBO/VAO for quad rendering. This is a single unit quad (0..1)
@@ -699,22 +699,22 @@ bool crystal_init(AuraWM *wm)
     shaders_init_quad_vbo();
 
     // Build the initial orthographic projection matrix
-    shaders_ortho(crystal.projection,
-                  0, (float)crystal.root_w,
-                  (float)crystal.root_h, 0,
+    shaders_ortho(moonrock.projection,
+                  0, (float)moonrock.root_w,
+                  (float)moonrock.root_h, 0,
                   -1.0f, 1.0f);
 
-    // Mark Crystal as active
-    crystal.active = true;
+    // Mark MoonRock as active
+    moonrock.active = true;
 
     // Also set the global compositor_active flag so the rest of the WM
     // (frame.c, decor.c) knows compositing is available. This flag controls
     // whether frame windows get ARGB visuals and shadow padding.
     compositor_active = true;
 
-    fprintf(stderr, "[crystal] Crystal Compositor initialized successfully\n");
-    fprintf(stderr, "[crystal] OpenGL renderer: %s\n", glGetString(GL_RENDERER));
-    fprintf(stderr, "[crystal] OpenGL version: %s\n", glGetString(GL_VERSION));
+    fprintf(stderr, "[moonrock] MoonRock Compositor initialized successfully\n");
+    fprintf(stderr, "[moonrock] OpenGL renderer: %s\n", glGetString(GL_RENDERER));
+    fprintf(stderr, "[moonrock] OpenGL version: %s\n", glGetString(GL_VERSION));
     return true;
 }
 
@@ -730,9 +730,9 @@ bool crystal_init(AuraWM *wm)
 // Returns NULL if the window isn't tracked (e.g., hasn't been mapped yet).
 static struct WindowTexture *find_window_texture(Window xwin)
 {
-    for (int i = 0; i < crystal.window_count; i++) {
-        if (crystal.windows[i].xwin == xwin) {
-            return &crystal.windows[i];
+    for (int i = 0; i < moonrock.window_count; i++) {
+        if (moonrock.windows[i].xwin == xwin) {
+            return &moonrock.windows[i];
         }
     }
     return NULL;
@@ -747,7 +747,7 @@ static struct WindowTexture *find_window_texture(Window xwin)
 // then sample from it directly when drawing.
 static void refresh_window_texture(AuraWM *wm, struct WindowTexture *wt)
 {
-    if (!crystal.has_texture_from_pixmap) {
+    if (!moonrock.has_texture_from_pixmap) {
         // Fall back to CPU-based texture upload
         refresh_window_texture_fallback(wm, wt);
         return;
@@ -791,15 +791,15 @@ static void refresh_window_texture(AuraWM *wm, struct WindowTexture *wt)
     // where the X server is rendering this window's contents.
     wt->pixmap = XCompositeNameWindowPixmap(wm->dpy, wt->xwin);
     if (!wt->pixmap) {
-        fprintf(stderr, "[crystal] WARNING: Cannot get pixmap for window 0x%lx\n",
+        fprintf(stderr, "[moonrock] WARNING: Cannot get pixmap for window 0x%lx\n",
                 wt->xwin);
         return;
     }
 
     // Choose the right FBConfig based on whether the window has alpha.
     // ARGB windows need the RGBA config; regular windows use RGB.
-    GLXFBConfig fb = wt->has_alpha ? crystal.pixmap_fb_config
-                                   : crystal.pixmap_fb_config_rgb;
+    GLXFBConfig fb = wt->has_alpha ? moonrock.pixmap_fb_config
+                                   : moonrock.pixmap_fb_config_rgb;
 
     // Create a GLX pixmap — this wraps the X pixmap so GLX can use it.
     // The attributes tell GLX how to interpret the pixmap data:
@@ -819,7 +819,7 @@ static void refresh_window_texture(AuraWM *wm, struct WindowTexture *wt)
         // menus, popups) if their visual doesn't match the FBConfig. Fall back
         // to the CPU-based texture upload which reads pixels via XGetImage and
         // uploads them with glTexImage2D — slower but works with any visual.
-        fprintf(stderr, "[crystal] GLX pixmap failed for 0x%lx, using CPU fallback\n",
+        fprintf(stderr, "[moonrock] GLX pixmap failed for 0x%lx, using CPU fallback\n",
                 wt->xwin);
         refresh_window_texture_fallback(wm, wt);
         return;
@@ -903,7 +903,7 @@ static void refresh_window_texture_fallback(AuraWM *wm, struct WindowTexture *wt
     XImage *img = XGetImage(wm->dpy, wt->pixmap, 0, 0,
                             wt->w, wt->h, AllPlanes, ZPixmap);
     if (!img) {
-        fprintf(stderr, "[crystal] WARNING: XGetImage failed for 0x%lx\n",
+        fprintf(stderr, "[moonrock] WARNING: XGetImage failed for 0x%lx\n",
                 wt->xwin);
         return;
     }
@@ -981,16 +981,16 @@ static void release_window_texture(AuraWM *wm, struct WindowTexture *wt)
 // SECTION: Window lifecycle (map/unmap/damage)
 // ────────────────────────────────────────────────────────────────────────
 
-void crystal_window_mapped(AuraWM *wm, Client *c)
+void mr_window_mapped(AuraWM *wm, Client *c)
 {
-    if (!crystal.active || !wm || !c || !c->frame) return;
+    if (!moonrock.active || !wm || !c || !c->frame) return;
 
     // Don't add duplicates — check if we're already tracking this window
     if (find_window_texture(c->frame)) return;
 
     // Make sure we haven't hit the window limit
-    if (crystal.window_count >= MAX_CLIENTS) {
-        fprintf(stderr, "[crystal] WARNING: Maximum window count reached, "
+    if (moonrock.window_count >= MAX_CLIENTS) {
+        fprintf(stderr, "[moonrock] WARNING: Maximum window count reached, "
                 "cannot track window 0x%lx\n", c->frame);
         return;
     }
@@ -999,13 +999,13 @@ void crystal_window_mapped(AuraWM *wm, Client *c)
     // Windows created with our ARGB visual will have depth 32.
     XWindowAttributes wa;
     if (!XGetWindowAttributes(wm->dpy, c->frame, &wa)) {
-        fprintf(stderr, "[crystal] WARNING: Cannot get attributes for 0x%lx\n",
+        fprintf(stderr, "[moonrock] WARNING: Cannot get attributes for 0x%lx\n",
                 c->frame);
         return;
     }
 
     // Create a new tracking entry for this window
-    struct WindowTexture *wt = &crystal.windows[crystal.window_count];
+    struct WindowTexture *wt = &moonrock.windows[moonrock.window_count];
     memset(wt, 0, sizeof(*wt));
 
     wt->xwin = c->frame;
@@ -1042,45 +1042,45 @@ void crystal_window_mapped(AuraWM *wm, Client *c)
     // We then acknowledge the damage and refresh the texture.
     wt->damage = XDamageCreate(wm->dpy, c->frame, XDamageReportNonEmpty);
 
-    crystal.window_count++;
+    moonrock.window_count++;
 
     if (getenv("AURA_DEBUG")) {
-        fprintf(stderr, "[crystal] Mapped window 0x%lx (%dx%d at %d,%d, "
+        fprintf(stderr, "[moonrock] Mapped window 0x%lx (%dx%d at %d,%d, "
                 "alpha=%d)\n", c->frame, wt->w, wt->h, wt->x, wt->y,
                 wt->has_alpha);
     }
 }
 
-void crystal_window_unmapped(AuraWM *wm, Client *c)
+void mr_window_unmapped(AuraWM *wm, Client *c)
 {
-    if (!crystal.active || !wm || !c) return;
+    if (!moonrock.active || !wm || !c) return;
 
     // Find the window in our tracking array
-    for (int i = 0; i < crystal.window_count; i++) {
-        if (crystal.windows[i].xwin == c->frame) {
+    for (int i = 0; i < moonrock.window_count; i++) {
+        if (moonrock.windows[i].xwin == c->frame) {
             // Release all GPU and X resources for this window
-            release_window_texture(wm, &crystal.windows[i]);
+            release_window_texture(wm, &moonrock.windows[i]);
 
             // Remove from the array by shifting everything after it left.
             // This maintains the z-order (array order = stacking order).
-            int remaining = crystal.window_count - i - 1;
+            int remaining = moonrock.window_count - i - 1;
             if (remaining > 0) {
-                memmove(&crystal.windows[i], &crystal.windows[i + 1],
+                memmove(&moonrock.windows[i], &moonrock.windows[i + 1],
                         remaining * sizeof(struct WindowTexture));
             }
-            crystal.window_count--;
+            moonrock.window_count--;
 
             if (getenv("AURA_DEBUG")) {
-                fprintf(stderr, "[crystal] Unmapped window 0x%lx\n", c->frame);
+                fprintf(stderr, "[moonrock] Unmapped window 0x%lx\n", c->frame);
             }
             return;
         }
     }
 }
 
-void crystal_window_damaged(AuraWM *wm, Client *c)
+void mr_window_damaged(AuraWM *wm, Client *c)
 {
-    if (!crystal.active || !wm || !c) return;
+    if (!moonrock.active || !wm || !c) return;
 
     // Try the frame window first (that's what we track), then the client window
     struct WindowTexture *wt = find_window_texture(c->frame);
@@ -1099,9 +1099,9 @@ void crystal_window_damaged(AuraWM *wm, Client *c)
 
 // Called when a window is resized — update our tracking info and refresh
 // the texture since the old pixmap is now invalid.
-void crystal_window_resized(AuraWM *wm, Client *c)
+void mr_window_resized(AuraWM *wm, Client *c)
 {
-    if (!crystal.active || !wm || !c) return;
+    if (!moonrock.active || !wm || !c) return;
 
     struct WindowTexture *wt = find_window_texture(c->frame);
     if (!wt) return;
@@ -1143,10 +1143,10 @@ void crystal_window_resized(AuraWM *wm, Client *c)
 // SECTION: Auto-discovery of visible windows via XQueryTree
 // ────────────────────────────────────────────────────────────────────────
 //
-// Crystal needs to composite ALL visible windows, including unmanaged ones
+// MoonRock needs to composite ALL visible windows, including unmanaged ones
 // (dock, desktop, menubar, spotlight) that the WM does not frame and does
 // not create Client structs for. Instead of requiring every window lifecycle
-// path to call crystal_window_mapped(), we use XQueryTree each frame to
+// path to call mr_window_mapped(), we use XQueryTree each frame to
 // discover all children of the root window and auto-track any new ones.
 //
 // This also handles cleanup: if a tracked window is no longer a child of
@@ -1200,17 +1200,17 @@ static void sync_tracked_windows(AuraWM *wm)
             }
 
             // Mark this entry as still alive
-            int idx = (int)(wt - crystal.windows);
-            if (idx >= 0 && idx < crystal.window_count) {
+            int idx = (int)(wt - moonrock.windows);
+            if (idx >= 0 && idx < moonrock.window_count) {
                 seen[idx] = true;
             }
             continue;
         }
 
         // New window — add a tracking entry if we have room
-        if (crystal.window_count >= MAX_CLIENTS) continue;
+        if (moonrock.window_count >= MAX_CLIENTS) continue;
 
-        wt = &crystal.windows[crystal.window_count];
+        wt = &moonrock.windows[moonrock.window_count];
         memset(wt, 0, sizeof(*wt));
 
         wt->xwin = children[i];
@@ -1241,11 +1241,11 @@ static void sync_tracked_windows(AuraWM *wm)
         }
 
         // Mark this new entry as seen
-        seen[crystal.window_count] = true;
-        crystal.window_count++;
+        seen[moonrock.window_count] = true;
+        moonrock.window_count++;
 
         if (getenv("AURA_DEBUG")) {
-            fprintf(stderr, "[crystal] Auto-tracked window 0x%lx (%dx%d at %d,%d%s)\n",
+            fprintf(stderr, "[moonrock] Auto-tracked window 0x%lx (%dx%d at %d,%d%s)\n",
                     children[i], wa.width, wa.height, wa.x, wa.y,
                     wa.override_redirect ? " override-redirect" : "");
         }
@@ -1253,29 +1253,29 @@ static void sync_tracked_windows(AuraWM *wm)
 
     // ── Pass 3: Remove tracked windows that are no longer visible ──
     // Iterate backwards so removals don't shift indices we haven't checked yet.
-    for (int i = crystal.window_count - 1; i >= 0; i--) {
+    for (int i = moonrock.window_count - 1; i >= 0; i--) {
         if (!seen[i]) {
             if (getenv("AURA_DEBUG")) {
-                fprintf(stderr, "[crystal] Removing stale window 0x%lx\n",
-                        crystal.windows[i].xwin);
+                fprintf(stderr, "[moonrock] Removing stale window 0x%lx\n",
+                        moonrock.windows[i].xwin);
             }
             // If this was an override-redirect window, unredirect it since
             // we explicitly redirected it in the tracking pass above.
             // This is safe even if the window is already destroyed — X11
             // silently ignores the call for non-existent windows.
-            if (crystal.windows[i].override_redirect) {
-                XCompositeUnredirectWindow(wm->dpy, crystal.windows[i].xwin,
+            if (moonrock.windows[i].override_redirect) {
+                XCompositeUnredirectWindow(wm->dpy, moonrock.windows[i].xwin,
                                            CompositeRedirectManual);
             }
 
-            release_window_texture(wm, &crystal.windows[i]);
+            release_window_texture(wm, &moonrock.windows[i]);
 
-            int remaining = crystal.window_count - i - 1;
+            int remaining = moonrock.window_count - i - 1;
             if (remaining > 0) {
-                memmove(&crystal.windows[i], &crystal.windows[i + 1],
+                memmove(&moonrock.windows[i], &moonrock.windows[i + 1],
                         remaining * sizeof(struct WindowTexture));
             }
-            crystal.window_count--;
+            moonrock.window_count--;
         }
     }
 
@@ -1283,11 +1283,11 @@ static void sync_tracked_windows(AuraWM *wm)
     // XQueryTree returns children in bottom-to-top order, which is exactly
     // the order we need for back-to-front compositing. Rebuild the array
     // to match this stacking order so windows overlap correctly.
-    if (crystal.window_count > 1) {
+    if (moonrock.window_count > 1) {
         struct WindowTexture reordered[MAX_CLIENTS];
         int count = 0;
 
-        for (unsigned int i = 0; i < nchildren && count < crystal.window_count; i++) {
+        for (unsigned int i = 0; i < nchildren && count < moonrock.window_count; i++) {
             struct WindowTexture *wt = find_window_texture(children[i]);
             if (wt) {
                 reordered[count++] = *wt;
@@ -1295,8 +1295,8 @@ static void sync_tracked_windows(AuraWM *wm)
         }
 
         // Copy the reordered array back
-        if (count == crystal.window_count) {
-            memcpy(crystal.windows, reordered,
+        if (count == moonrock.window_count) {
+            memcpy(moonrock.windows, reordered,
                    count * sizeof(struct WindowTexture));
         }
     }
@@ -1370,7 +1370,7 @@ static void generate_shadow_texture(struct WindowTexture *wt, bool focused)
     // Prevent integer overflow and unreasonable GPU allocations.
     // 16384 is a safe upper bound for texture dimensions on most GPUs.
     if (shadow_w <= 0 || shadow_h <= 0 || shadow_w > 16384 || shadow_h > 16384) {
-        fprintf(stderr, "[crystal] Shadow dimensions out of range: %dx%d\n",
+        fprintf(stderr, "[moonrock] Shadow dimensions out of range: %dx%d\n",
                 shadow_w, shadow_h);
         return;
     }
@@ -1531,7 +1531,7 @@ static void generate_shadow_texture(struct WindowTexture *wt, bool focused)
 
     // Cache the texture handle and dimensions so we can reuse it every
     // frame without recomputing. The shadow only needs regeneration when
-    // the window is resized (handled in crystal_window_resized).
+    // the window is resized (handled in mr_window_resized).
     wt->shadow_tex = tex;
     wt->shadow_tex_w = shadow_w;
     wt->shadow_tex_h = shadow_h;
@@ -1589,11 +1589,11 @@ static void draw_window_shadow(struct WindowTexture *wt, bool focused)
     // shadow texture and outputs premultiplied black with that alpha.
     // The u_alpha uniform is set to 1.0 because shadow intensity is
     // already baked into the cached texture.
-    if (crystal.shaders.shadow) {
-        shaders_use(crystal.shaders.shadow);
-        shaders_set_projection(crystal.shaders.shadow, crystal.projection);
-        shaders_set_texture(crystal.shaders.shadow, 0);
-        shaders_set_alpha(crystal.shaders.shadow, 1.0f);
+    if (moonrock.shaders.shadow) {
+        shaders_use(moonrock.shaders.shadow);
+        shaders_set_projection(moonrock.shaders.shadow, moonrock.projection);
+        shaders_set_texture(moonrock.shaders.shadow, 0);
+        shaders_set_alpha(moonrock.shaders.shadow, 1.0f);
         glBindTexture(GL_TEXTURE_2D, wt->shadow_tex);
         shaders_draw_quad(sx, sy,
                           (float)wt->shadow_tex_w, (float)wt->shadow_tex_h);
@@ -1620,7 +1620,7 @@ static void draw_window_shadow(struct WindowTexture *wt, bool focused)
 // SECTION: Main compositing pass
 // ────────────────────────────────────────────────────────────────────────
 //
-// This is the heart of Crystal — called every frame from the event loop.
+// This is the heart of MoonRock — called every frame from the event loop.
 // It draws all visible windows to the screen using OpenGL.
 //
 // The rendering process is:
@@ -1632,9 +1632,9 @@ static void draw_window_shadow(struct WindowTexture *wt, bool focused)
 //      c. Draw a textured quad at the window's screen position
 //   4. Swap buffers to show the frame
 
-void crystal_composite(AuraWM *wm)
+void mr_composite(AuraWM *wm)
 {
-    if (!crystal.active || !wm) return;
+    if (!moonrock.active || !wm) return;
 
     // ── Step 0: Check for direct scanout bypass ──
     // If a single fullscreen opaque window covers the entire display (e.g.,
@@ -1648,8 +1648,8 @@ void crystal_composite(AuraWM *wm)
     // Make our GL context current. This is technically redundant if we're
     // the only GL user, but it's good practice — other code might have
     // changed the current context.
-    glXMakeContextCurrent(wm->dpy, crystal.gl_window, crystal.gl_window,
-                          crystal.gl_context);
+    glXMakeContextCurrent(wm->dpy, moonrock.gl_window, moonrock.gl_window,
+                          moonrock.gl_context);
 
     // ── Step 1: Clear the screen ──
     glClear(GL_COLOR_BUFFER_BIT);
@@ -1658,9 +1658,9 @@ void crystal_composite(AuraWM *wm)
     // Rebuild the orthographic projection each frame in case the screen was
     // resized. This maps pixel coordinates to OpenGL clip space:
     //   (0,0) = top-left, (root_w, root_h) = bottom-right.
-    shaders_ortho(crystal.projection,
-                  0, (float)crystal.root_w,
-                  (float)crystal.root_h, 0,
+    shaders_ortho(moonrock.projection,
+                  0, (float)moonrock.root_w,
+                  (float)moonrock.root_h, 0,
                   -1.0f, 1.0f);
 
     // ── Step 3: Enable blending for transparent windows ──
@@ -1688,8 +1688,8 @@ void crystal_composite(AuraWM *wm)
     // top, and normal windows are sandwiched between them.
 
     for (int pass = 0; pass < 3; pass++) {
-        for (int i = 0; i < crystal.window_count; i++) {
-            struct WindowTexture *wt = &crystal.windows[i];
+        for (int i = 0; i < moonrock.window_count; i++) {
+            struct WindowTexture *wt = &moonrock.windows[i];
 
             // Determine which pass this window belongs to by checking
             // the _NET_WM_WINDOW_TYPE property. Dock/panel windows go in
@@ -1746,7 +1746,7 @@ void crystal_composite(AuraWM *wm)
             // Before drawing the panel, we capture the region behind it,
             // blur it, and draw the blurred result. The panel's own texture
             // is then composited on top, creating the frosted glass look.
-            if (window_pass == 2 && crystal.shaders.blur_h && crystal.shaders.blur_v) {
+            if (window_pass == 2 && moonrock.shaders.blur_h && moonrock.shaders.blur_v) {
                 ThemeDefinition *theme = plugin_get_theme();
                 float blur_radius = theme ? theme->blur_behind_radius : 0.0f;
                 if (blur_radius > 0.0f) {
@@ -1759,11 +1759,11 @@ void crystal_composite(AuraWM *wm)
             // Activate the basic shader program, which samples the window's
             // texture and applies alpha blending. Then draw a quad covering
             // the window's screen rectangle using the VBO pipeline.
-            if (crystal.shaders.basic) {
-                shaders_use(crystal.shaders.basic);
-                shaders_set_projection(crystal.shaders.basic, crystal.projection);
-                shaders_set_texture(crystal.shaders.basic, 0);
-                shaders_set_alpha(crystal.shaders.basic, 1.0f);
+            if (moonrock.shaders.basic) {
+                shaders_use(moonrock.shaders.basic);
+                shaders_set_projection(moonrock.shaders.basic, moonrock.projection);
+                shaders_set_texture(moonrock.shaders.basic, 0);
+                shaders_set_alpha(moonrock.shaders.basic, 1.0f);
                 glBindTexture(GL_TEXTURE_2D, wt->texture);
                 shaders_draw_quad((float)wt->x, (float)wt->y,
                                   (float)wt->w, (float)wt->h);
@@ -1800,21 +1800,21 @@ void crystal_composite(AuraWM *wm)
     //
     // If VSync is enabled, this call blocks until the next vertical blank
     // period, limiting us to the monitor's refresh rate (typically 60 FPS).
-    glXSwapBuffers(wm->dpy, crystal.gl_window);
+    glXSwapBuffers(wm->dpy, moonrock.gl_window);
 }
 
 // ────────────────────────────────────────────────────────────────────────
 // SECTION: Event handling
 // ────────────────────────────────────────────────────────────────────────
 
-bool crystal_handle_event(AuraWM *wm, XEvent *e)
+bool mr_handle_event(AuraWM *wm, XEvent *e)
 {
-    if (!crystal.active || !wm || !e) return false;
+    if (!moonrock.active || !wm || !e) return false;
 
     // Check if this is an XDamage event.
     // XDamage events have type == (damage_event_base + XDamageNotify).
     // XDamageNotify is 0, so the type is just damage_event_base.
-    if (e->type == crystal.damage_event_base + XDamageNotify) {
+    if (e->type == moonrock.damage_event_base + XDamageNotify) {
         // Cast the generic XEvent to the damage-specific struct
         XDamageNotifyEvent *dev = (XDamageNotifyEvent *)e;
 
@@ -1842,7 +1842,7 @@ bool crystal_handle_event(AuraWM *wm, XEvent *e)
         return true;  // Event was handled
     }
 
-    return false;  // Not a Crystal event
+    return false;  // Not a MoonRock event
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -1855,9 +1855,9 @@ bool crystal_handle_event(AuraWM *wm, XEvent *e)
 // shadow padding lets clicks fall through to windows behind.
 //
 // This is the same logic as the old compositor_set_input_shape(), kept
-// here for consistency since Crystal owns compositing now.
+// here for consistency since MoonRock owns compositing now.
 
-void crystal_set_input_shape(AuraWM *wm, Client *c)
+void mr_set_input_shape(AuraWM *wm, Client *c)
 {
     if (!wm || !c || !c->frame) return;
 
@@ -1884,7 +1884,7 @@ void crystal_set_input_shape(AuraWM *wm, Client *c)
     XFixesDestroyRegion(wm->dpy, region);
 
     if (getenv("AURA_DEBUG")) {
-        fprintf(stderr, "[crystal] Set input shape for '%s': "
+        fprintf(stderr, "[moonrock] Set input shape for '%s': "
                 "clickable at (%d,%d) %dx%d\n",
                 c->title, rect.x, rect.y, rect.width, rect.height);
     }
@@ -1894,22 +1894,22 @@ void crystal_set_input_shape(AuraWM *wm, Client *c)
 // SECTION: ARGB visual access
 // ────────────────────────────────────────────────────────────────────────
 //
-// These functions expose Crystal's ARGB visual and colormap to the rest of
+// These functions expose MoonRock's ARGB visual and colormap to the rest of
 // the window manager (especially frame.c, which needs them to create frame
 // windows with alpha support).
 //
 // They maintain compatibility with the old compositor's
 // compositor_create_argb_visual() interface.
 
-bool crystal_create_argb_visual(AuraWM *wm, Visual **out_visual,
+bool mr_create_argb_visual(AuraWM *wm, Visual **out_visual,
                                 Colormap *out_colormap)
 {
     if (!out_visual || !out_colormap) return false;
 
-    // If Crystal found an ARGB visual during init, return it
-    if (crystal.argb_visual && crystal.argb_colormap) {
-        *out_visual = crystal.argb_visual;
-        *out_colormap = crystal.argb_colormap;
+    // If MoonRock found an ARGB visual during init, return it
+    if (moonrock.argb_visual && moonrock.argb_colormap) {
+        *out_visual = moonrock.argb_visual;
+        *out_colormap = moonrock.argb_colormap;
         return true;
     }
 
@@ -1950,100 +1950,100 @@ bool crystal_create_argb_visual(AuraWM *wm, Visual **out_visual,
 // SECTION: Status queries
 // ────────────────────────────────────────────────────────────────────────
 
-bool crystal_is_active(void)
+bool mr_is_active(void)
 {
-    return crystal.active;
+    return moonrock.active;
 }
 
-int crystal_get_damage_event_base(void)
+int mr_get_damage_event_base(void)
 {
-    return crystal.damage_event_base;
+    return moonrock.damage_event_base;
 }
 
 // ────────────────────────────────────────────────────────────────────────
 // SECTION: Screen resize handling
 // ────────────────────────────────────────────────────────────────────────
 
-static void crystal_screen_resized(AuraWM *wm)
+static void mr_screen_resized(AuraWM *wm)
 {
-    if (!crystal.active || !wm) return;
+    if (!moonrock.active || !wm) return;
 
     // Update our stored screen dimensions
-    crystal.root_w = wm->root_w;
-    crystal.root_h = wm->root_h;
+    moonrock.root_w = wm->root_w;
+    moonrock.root_h = wm->root_h;
 
     // Update the GL viewport to match the new screen size.
     // The viewport maps OpenGL's normalized coordinates to pixel coordinates.
     // (0, 0) is the bottom-left corner; (root_w, root_h) is the top-right.
-    glViewport(0, 0, crystal.root_w, crystal.root_h);
+    glViewport(0, 0, moonrock.root_w, moonrock.root_h);
 
     // Rebuild the orthographic projection matrix for the new dimensions
-    shaders_ortho(crystal.projection,
-                  0, (float)crystal.root_w,
-                  (float)crystal.root_h, 0,
+    shaders_ortho(moonrock.projection,
+                  0, (float)moonrock.root_w,
+                  (float)moonrock.root_h, 0,
                   -1.0f, 1.0f);
 
-    fprintf(stderr, "[crystal] Screen resized to %dx%d\n",
-            crystal.root_w, crystal.root_h);
+    fprintf(stderr, "[moonrock] Screen resized to %dx%d\n",
+            moonrock.root_w, moonrock.root_h);
 }
 
 // ────────────────────────────────────────────────────────────────────────
 // SECTION: Shutdown
 // ────────────────────────────────────────────────────────────────────────
 
-void crystal_shutdown(AuraWM *wm)
+void mr_shutdown(AuraWM *wm)
 {
     if (!wm || !wm->dpy) return;
 
-    fprintf(stderr, "[crystal] Shutting down Crystal Compositor...\n");
+    fprintf(stderr, "[moonrock] Shutting down MoonRock Compositor...\n");
 
     // Destroy shader programs and VBO before releasing GL context
-    shaders_shutdown(&crystal.shaders);
+    shaders_shutdown(&moonrock.shaders);
     shaders_shutdown_quad_vbo();
 
     // Release all tracked window textures
-    for (int i = 0; i < crystal.window_count; i++) {
-        release_window_texture(wm, &crystal.windows[i]);
+    for (int i = 0; i < moonrock.window_count; i++) {
+        release_window_texture(wm, &moonrock.windows[i]);
     }
-    crystal.window_count = 0;
+    moonrock.window_count = 0;
 
     // Undo XComposite redirection — let X go back to drawing windows directly.
     // This is critical for a clean shutdown. If we don't do this and the WM
     // crashes, the screen goes blank because windows are still redirected to
     // off-screen pixmaps that nobody is compositing.
-    if (crystal.active) {
+    if (moonrock.active) {
         XCompositeUnredirectSubwindows(wm->dpy, wm->root,
                                        CompositeRedirectManual);
-        fprintf(stderr, "[crystal] Unredirected subwindows\n");
+        fprintf(stderr, "[moonrock] Unredirected subwindows\n");
     }
 
     // Destroy the GLX context and window.
     // Order matters: release the context first, then destroy the window.
-    if (crystal.gl_context) {
+    if (moonrock.gl_context) {
         // Make sure nothing is current before destroying
         glXMakeContextCurrent(wm->dpy, None, None, NULL);
 
-        if (crystal.gl_window) {
-            glXDestroyWindow(wm->dpy, crystal.gl_window);
-            crystal.gl_window = 0;
+        if (moonrock.gl_window) {
+            glXDestroyWindow(wm->dpy, moonrock.gl_window);
+            moonrock.gl_window = 0;
         }
 
-        glXDestroyContext(wm->dpy, crystal.gl_context);
-        crystal.gl_context = NULL;
+        glXDestroyContext(wm->dpy, moonrock.gl_context);
+        moonrock.gl_context = NULL;
     }
 
     // Free the ARGB colormap (the visual is owned by X, not us)
-    if (crystal.argb_colormap) {
-        XFreeColormap(wm->dpy, crystal.argb_colormap);
-        crystal.argb_colormap = 0;
+    if (moonrock.argb_colormap) {
+        XFreeColormap(wm->dpy, moonrock.argb_colormap);
+        moonrock.argb_colormap = 0;
     }
-    crystal.argb_visual = NULL;
+    moonrock.argb_visual = NULL;
 
     // Clear flags
-    crystal.active = false;
+    moonrock.active = false;
     compositor_active = false;
 
-    fprintf(stderr, "[crystal] Crystal Compositor shut down\n");
+    fprintf(stderr, "[moonrock] MoonRock Compositor shut down\n");
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -2055,7 +2055,7 @@ void crystal_shutdown(AuraWM *wm)
 // in the GL pipeline. For now, these are no-ops so the rest of the codebase
 // can call them without conditional compilation.
 
-void crystal_animate_minimize(AuraWM *wm, Client *c,
+void mr_animate_minimize(AuraWM *wm, Client *c,
                               int dock_icon_x, int dock_icon_y)
 {
     // Phase 4: Genie minimize animation.
@@ -2067,7 +2067,7 @@ void crystal_animate_minimize(AuraWM *wm, Client *c,
     (void)dock_icon_y;
 }
 
-void crystal_animate_restore(AuraWM *wm, Client *c,
+void mr_animate_restore(AuraWM *wm, Client *c,
                              int dock_icon_x, int dock_icon_y)
 {
     // Phase 4: Genie restore animation (reverse of minimize).
@@ -2078,10 +2078,10 @@ void crystal_animate_restore(AuraWM *wm, Client *c,
     (void)dock_icon_y;
 }
 
-bool crystal_animation_active(AuraWM *wm)
+bool mr_animation_active(AuraWM *wm)
 {
     // Phase 4: Returns true if any animation is in progress.
-    // When active, the main loop should keep calling crystal_composite()
+    // When active, the main loop should keep calling mr_composite()
     // at the refresh rate to advance the animation smoothly.
     (void)wm;
     return false;
@@ -2092,24 +2092,24 @@ bool crystal_animation_active(AuraWM *wm)
 // SECTION: Shader and texture accessors
 // ────────────────────────────────────────────────────────────────────────
 //
-// These let other Crystal modules (Mission Control, animations, plugins)
+// These let other MoonRock modules (Mission Control, animations, plugins)
 // access the shader programs and window textures without reaching into
-// the static crystal struct directly.
+// the static moonrock struct directly.
 
-ShaderPrograms *crystal_get_shaders(void)
+ShaderPrograms *mr_get_shaders(void)
 {
-    return &crystal.shaders;
+    return &moonrock.shaders;
 }
 
-float *crystal_get_projection(void)
+float *mr_get_projection(void)
 {
-    return crystal.projection;
+    return moonrock.projection;
 }
 
 // Look up a window's GL texture handle by its X window ID.
 // Returns the texture handle, or 0 if the window isn't tracked.
 // This is used by Mission Control to draw window thumbnails.
-GLuint crystal_get_window_texture_id(Window xwin)
+GLuint mr_get_window_texture_id(Window xwin)
 {
     struct WindowTexture *wt = find_window_texture(xwin);
     if (wt && wt->texture) {

@@ -4,11 +4,11 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Shaders — GLSL shader compilation, linking, and management
+//  MoonRock Shaders — GLSL shader compilation, linking, and management
 // ============================================================================
 //
-// This module replaces Crystal's fixed-function OpenGL pipeline with
-// programmable GLSL shaders. Every visual effect Crystal renders — textured
+// This module replaces MoonRock's fixed-function OpenGL pipeline with
+// programmable GLSL shaders. Every visual effect MoonRock renders — textured
 // windows, Gaussian blur, drop shadows, genie animations — flows through
 // a shader program compiled and managed here.
 //
@@ -30,7 +30,7 @@
 // ============================================================================
 
 #define _GNU_SOURCE
-#include "crystal_shaders.h"
+#include "moonrock_shaders.h"
 
 #include <GL/gl.h>
 #include <GL/glext.h>    // GL extension constants (GL_VERTEX_SHADER, etc.)
@@ -108,7 +108,7 @@ static PFNGLENABLEVERTEXATTRIBARRAYPROC pfn_glEnableVertexAttribArray = NULL;
 // load_gl_functions — Load all GL 2.0+ function pointers we need.
 //
 // This must be called AFTER a valid GL context has been created and made
-// current (by crystal_init). Without a context, glXGetProcAddress returns
+// current (by mr_init). Without a context, glXGetProcAddress returns
 // garbage pointers.
 //
 // Returns true if all required functions were loaded, false if any failed.
@@ -120,7 +120,7 @@ static bool load_gl_functions(void)
     #define LOAD_GL(name, type) do {                                         \
         pfn_##name = (type)glXGetProcAddress((const GLubyte *)#name);        \
         if (!pfn_##name) {                                                   \
-            fprintf(stderr, "[crystal] Failed to load GL function: %s\n",   \
+            fprintf(stderr, "[moonrock] Failed to load GL function: %s\n",   \
                     #name);                                                  \
             return false;                                                    \
         }                                                                    \
@@ -176,7 +176,7 @@ static bool load_gl_functions(void)
 
     #undef LOAD_GL
 
-    fprintf(stderr, "[crystal] All GL 2.0+ functions loaded successfully\n");
+    fprintf(stderr, "[moonrock] All GL 2.0+ functions loaded successfully\n");
     return true;
 }
 
@@ -186,7 +186,7 @@ static bool load_gl_functions(void)
 // ============================================================================
 //
 // These are the GLSL shader source strings compiled into the binary. If the
-// external .vert/.frag files can't be found, Crystal uses these instead.
+// external .vert/.frag files can't be found, MoonRock uses these instead.
 // This guarantees the compositor always starts, even without a data directory.
 //
 // GLSL version 120 targets OpenGL 2.1, which is the minimum we require.
@@ -470,7 +470,7 @@ static UniformCache *get_cache(GLuint program)
         // SECURITY FIX: Don't silently reuse the first entry — that corrupts
         // its uniform locations. Instead, evict the oldest entry (LRU-style)
         // by shifting the array and reusing the last slot.
-        fprintf(stderr, "[crystal] Uniform cache full — evicting oldest entry\n");
+        fprintf(stderr, "[moonrock] Uniform cache full — evicting oldest entry\n");
         memmove(&uniform_cache[0], &uniform_cache[1],
                 (MAX_CACHED_PROGRAMS - 1) * sizeof(uniform_cache[0]));
         uniform_cache_count = MAX_CACHED_PROGRAMS - 1;
@@ -538,7 +538,7 @@ char *shaders_load_file(const char *path)
     // +1 for the null terminator (GLSL source must be null-terminated)
     char *buf = malloc(size + 1);
     if (!buf) {
-        fprintf(stderr, "[crystal] Out of memory loading shader: %s\n", path);
+        fprintf(stderr, "[moonrock] Out of memory loading shader: %s\n", path);
         fclose(f);
         return NULL;
     }
@@ -558,7 +558,7 @@ char *shaders_load_file(const char *path)
 GLuint shaders_compile(GLenum type, const char *source)
 {
     if (!pfn_glCreateShader) {
-        fprintf(stderr, "[crystal] GL functions not loaded — call shaders_init first\n");
+        fprintf(stderr, "[moonrock] GL functions not loaded — call shaders_init first\n");
         return 0;
     }
 
@@ -566,7 +566,7 @@ GLuint shaders_compile(GLenum type, const char *source)
     // 'type' is either GL_VERTEX_SHADER or GL_FRAGMENT_SHADER.
     GLuint shader = pfn_glCreateShader(type);
     if (!shader) {
-        fprintf(stderr, "[crystal] glCreateShader failed\n");
+        fprintf(stderr, "[moonrock] glCreateShader failed\n");
         return 0;
     }
 
@@ -588,7 +588,7 @@ GLuint shaders_compile(GLenum type, const char *source)
         char log[1024];
         pfn_glGetShaderInfoLog(shader, sizeof(log), NULL, log);
         const char *type_str = (type == GL_VERTEX_SHADER) ? "vertex" : "fragment";
-        fprintf(stderr, "[crystal] %s shader compile error:\n%s\n", type_str, log);
+        fprintf(stderr, "[moonrock] %s shader compile error:\n%s\n", type_str, log);
         pfn_glDeleteShader(shader);
         return 0;
     }
@@ -604,14 +604,14 @@ GLuint shaders_compile(GLenum type, const char *source)
 GLuint shaders_link(GLuint vert, GLuint frag)
 {
     if (!vert || !frag) {
-        fprintf(stderr, "[crystal] Cannot link program: invalid shader handle(s)\n");
+        fprintf(stderr, "[moonrock] Cannot link program: invalid shader handle(s)\n");
         return 0;
     }
 
     // Create a program object — this will hold the linked vertex + fragment pair
     GLuint program = pfn_glCreateProgram();
     if (!program) {
-        fprintf(stderr, "[crystal] glCreateProgram failed\n");
+        fprintf(stderr, "[moonrock] glCreateProgram failed\n");
         return 0;
     }
 
@@ -631,7 +631,7 @@ GLuint shaders_link(GLuint vert, GLuint frag)
     if (!success) {
         char log[1024];
         pfn_glGetProgramInfoLog(program, sizeof(log), NULL, log);
-        fprintf(stderr, "[crystal] Shader link error:\n%s\n", log);
+        fprintf(stderr, "[moonrock] Shader link error:\n%s\n", log);
         pfn_glDeleteProgram(program);
         return 0;
     }
@@ -653,17 +653,17 @@ GLuint shaders_link(GLuint vert, GLuint frag)
 static GLuint compile_program(const char *vert_src, const char *frag_src,
                               const char *name)
 {
-    fprintf(stderr, "[crystal] Compiling shader program: %s\n", name);
+    fprintf(stderr, "[moonrock] Compiling shader program: %s\n", name);
 
     GLuint vert = shaders_compile(GL_VERTEX_SHADER, vert_src);
     if (!vert) {
-        fprintf(stderr, "[crystal]   -> vertex shader failed for '%s'\n", name);
+        fprintf(stderr, "[moonrock]   -> vertex shader failed for '%s'\n", name);
         return 0;
     }
 
     GLuint frag = shaders_compile(GL_FRAGMENT_SHADER, frag_src);
     if (!frag) {
-        fprintf(stderr, "[crystal]   -> fragment shader failed for '%s'\n", name);
+        fprintf(stderr, "[moonrock]   -> fragment shader failed for '%s'\n", name);
         pfn_glDeleteShader(vert);
         return 0;
     }
@@ -676,11 +676,11 @@ static GLuint compile_program(const char *vert_src, const char *frag_src,
     pfn_glDeleteShader(frag);
 
     if (!program) {
-        fprintf(stderr, "[crystal]   -> linking failed for '%s'\n", name);
+        fprintf(stderr, "[moonrock]   -> linking failed for '%s'\n", name);
         return 0;
     }
 
-    fprintf(stderr, "[crystal]   -> '%s' compiled successfully (program %u)\n",
+    fprintf(stderr, "[moonrock]   -> '%s' compiled successfully (program %u)\n",
             name, program);
     return program;
 }
@@ -712,13 +712,13 @@ static const char *try_load_source(const char *shader_dir, const char *filename,
 
     char *file_src = shaders_load_file(path);
     if (file_src) {
-        fprintf(stderr, "[crystal] Loaded shader from file: %s\n", path);
+        fprintf(stderr, "[moonrock] Loaded shader from file: %s\n", path);
         *needs_free = true;
         return file_src;
     }
 
     // File not found — use the embedded fallback
-    fprintf(stderr, "[crystal] Using embedded fallback for: %s\n", filename);
+    fprintf(stderr, "[moonrock] Using embedded fallback for: %s\n", filename);
     return fallback;
 }
 
@@ -737,9 +737,9 @@ bool shaders_init(ShaderPrograms *progs, const char *shader_dir)
     memset(uniform_cache, 0, sizeof(uniform_cache));
 
     // Load GL 2.0+ functions from the driver.
-    // This MUST happen after a GL context is current (crystal_init does that).
+    // This MUST happen after a GL context is current (mr_init does that).
     if (!load_gl_functions()) {
-        fprintf(stderr, "[crystal] Cannot initialize shaders: GL function loading failed\n");
+        fprintf(stderr, "[moonrock] Cannot initialize shaders: GL function loading failed\n");
         return false;
     }
 
@@ -832,12 +832,12 @@ bool shaders_init(ShaderPrograms *progs, const char *shader_dir)
 
     // The 'basic' program is essential — if it failed, we can't render at all
     if (!progs->basic) {
-        fprintf(stderr, "[crystal] FATAL: basic shader program failed to compile\n");
+        fprintf(stderr, "[moonrock] FATAL: basic shader program failed to compile\n");
         shaders_shutdown(progs);
         return false;
     }
 
-    fprintf(stderr, "[crystal] Shader initialization complete. Programs: "
+    fprintf(stderr, "[moonrock] Shader initialization complete. Programs: "
             "basic=%u blur_h=%u blur_v=%u shadow=%u solid=%u genie=%u "
             "desaturate=%u tint=%u\n",
             progs->basic, progs->blur_h, progs->blur_v,
@@ -877,7 +877,7 @@ void shaders_shutdown(ShaderPrograms *progs)
     uniform_cache_count = 0;
     memset(uniform_cache, 0, sizeof(uniform_cache));
 
-    fprintf(stderr, "[crystal] Shader programs destroyed\n");
+    fprintf(stderr, "[moonrock] Shader programs destroyed\n");
 }
 
 
@@ -1152,7 +1152,7 @@ void shaders_init_quad_vbo(void)
     // Unbind the VAO (good practice — prevents accidental modification)
     pfn_glBindVertexArray(0);
 
-    fprintf(stderr, "[crystal] Quad VBO initialized (VAO=%u VBO=%u EBO=%u)\n",
+    fprintf(stderr, "[moonrock] Quad VBO initialized (VAO=%u VBO=%u EBO=%u)\n",
             quad_vao, quad_vbo, quad_ebo);
 }
 
@@ -1172,7 +1172,7 @@ void shaders_shutdown_quad_vbo(void)
         quad_vao = 0;
     }
 
-    fprintf(stderr, "[crystal] Quad VBO destroyed\n");
+    fprintf(stderr, "[moonrock] Quad VBO destroyed\n");
 }
 
 
@@ -1299,7 +1299,7 @@ GLuint shaders_create_fbo(int width, int height, GLuint *out_texture)
     // 8192 is a conservative limit that all modern GPUs support.
 #define MAX_FBO_DIM 8192
     if (width <= 0 || height <= 0 || width > MAX_FBO_DIM || height > MAX_FBO_DIM) {
-        fprintf(stderr, "[crystal] FBO size out of bounds: %dx%d\n", width, height);
+        fprintf(stderr, "[moonrock] FBO size out of bounds: %dx%d\n", width, height);
         if (out_texture) *out_texture = 0;
         return 0;
     }
@@ -1355,7 +1355,7 @@ GLuint shaders_create_fbo(int width, int height, GLuint *out_texture)
     // to debug — so we check explicitly.
     GLenum status = pfn_glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
-        fprintf(stderr, "[crystal] FBO creation failed (status=0x%X, size=%dx%d)\n",
+        fprintf(stderr, "[moonrock] FBO creation failed (status=0x%X, size=%dx%d)\n",
                 status, width, height);
         pfn_glDeleteFramebuffers(1, &fbo);
         glDeleteTextures(1, &tex);
@@ -1368,7 +1368,7 @@ GLuint shaders_create_fbo(int width, int height, GLuint *out_texture)
 
     *out_texture = tex;
 
-    fprintf(stderr, "[crystal] FBO created (fbo=%u tex=%u size=%dx%d)\n",
+    fprintf(stderr, "[moonrock] FBO created (fbo=%u tex=%u size=%dx%d)\n",
             fbo, tex, width, height);
     return fbo;
 }

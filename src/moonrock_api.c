@@ -4,41 +4,41 @@
 // via any medium, is strictly prohibited.
 
 // ============================================================================
-// crystal_api.c — Public API Implementation for Crystal Compositor
+// moonrock_api.c — Public API Implementation for MoonRock Compositor
 // ============================================================================
 //
-// This file implements the public API declared in crystal_api.h. It acts as
-// an adapter between the clean, WM-agnostic public interface and Crystal's
+// This file implements the public API declared in moonrock_api.h. It acts as
+// an adapter between the clean, WM-agnostic public interface and MoonRock's
 // internal modules which were originally written for AuraOS's window manager.
 //
 // The translation works like this:
 //
-//   1. crystal_api_init() creates an internal AuraWM struct (the compat shim)
-//      and passes it to crystal_init(). External callers never see AuraWM.
+//   1. mr_api_init() creates an internal AuraWM struct (the compat shim)
+//      and passes it to mr_init(). External callers never see AuraWM.
 //
-//   2. crystal_api_composite() receives an array of CrystalWindow structs
+//   2. mr_api_composite() receives an array of MRWindow structs
 //      from the WM. It translates each one into the internal Client format,
-//      updates the compat AuraWM's client list, then calls crystal_composite().
+//      updates the compat AuraWM's client list, then calls mr_composite().
 //
 //   3. Animation, Mission Control, and event functions delegate directly to
 //      the internal modules with the stored AuraWM pointer.
 //
-// This means ANY X11 window manager can use Crystal — not just AuraOS.
-// The WM just fills in CrystalWindow structs and calls the API.
+// This means ANY X11 window manager can use MoonRock — not just AuraOS.
+// The WM just fills in MRWindow structs and calls the API.
 // ============================================================================
 
 #define _GNU_SOURCE
-#include "crystal_api.h"
+#include "moonrock_api.h"
 #include "wm_compat.h"
-#include "crystal.h"
-#include "crystal_anim.h"
-#include "crystal_mission_control.h"
-#include "crystal_touch.h"
-#include "crystal_display.h"
-#include "crystal_color.h"
-#include "crystal_plugin.h"
-#include "crystal_robust.h"
-#include "crystal_shaders.h"
+#include "moonrock.h"
+#include "moonrock_anim.h"
+#include "moonrock_mission_control.h"
+#include "moonrock_touch.h"
+#include "moonrock_display.h"
+#include "moonrock_color.h"
+#include "moonrock_plugin.h"
+#include "moonrock_robust.h"
+#include "moonrock_shaders.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -48,12 +48,12 @@
 // Module state
 // ============================================================================
 //
-// Crystal's public API manages a single compositor instance. The internal
+// MoonRock's public API manages a single compositor instance. The internal
 // AuraWM struct is our bridge to the internal code — we own it, populate it
-// from CrystalWindow arrays, and pass it to the internal functions.
+// from MRWindow arrays, and pass it to the internal functions.
 
 static struct {
-    bool initialized;        // Has crystal_api_init() been called successfully?
+    bool initialized;        // Has mr_api_init() been called successfully?
     AuraWM wm;               // Internal WM compat struct (owned by us)
     bool needs_composite;    // Does the next frame need a composite pass?
     bool needs_restack;      // Has the window list changed?
@@ -63,15 +63,15 @@ static struct {
 // Lifecycle
 // ============================================================================
 
-bool crystal_api_init(Display *dpy, int screen)
+bool mr_api_init(Display *dpy, int screen)
 {
     if (api_state.initialized) {
-        fprintf(stderr, "[crystal_api] Already initialized\n");
+        fprintf(stderr, "[moonrock_api] Already initialized\n");
         return true;
     }
 
     if (!dpy) {
-        fprintf(stderr, "[crystal_api] NULL display\n");
+        fprintf(stderr, "[moonrock_api] NULL display\n");
         return false;
     }
 
@@ -83,13 +83,13 @@ bool crystal_api_init(Display *dpy, int screen)
     api_state.wm.root_w = DisplayWidth(dpy, screen);
     api_state.wm.root_h = DisplayHeight(dpy, screen);
 
-    // Intern all the EWMH atoms Crystal's internal code needs.
+    // Intern all the EWMH atoms MoonRock's internal code needs.
     wm_compat_init_atoms(&api_state.wm);
 
     // Initialize the core compositor (GLX context, XComposite redirect,
     // damage tracking, shadow kernel, etc.)
-    if (!crystal_init(&api_state.wm)) {
-        fprintf(stderr, "[crystal_api] crystal_init() failed\n");
+    if (!mr_init(&api_state.wm)) {
+        fprintf(stderr, "[moonrock_api] mr_init() failed\n");
         return false;
     }
 
@@ -99,55 +99,55 @@ bool crystal_api_init(Display *dpy, int screen)
     api_state.initialized = true;
     api_state.needs_composite = true;
 
-    fprintf(stderr, "[crystal_api] Crystal Compositor initialized "
+    fprintf(stderr, "[moonrock_api] MoonRock Compositor initialized "
             "(screen %d, %dx%d)\n",
             screen, api_state.wm.root_w, api_state.wm.root_h);
 
     return true;
 }
 
-void crystal_api_shutdown(void)
+void mr_api_shutdown(void)
 {
     if (!api_state.initialized) return;
 
     // Shut down subsystems in reverse order of initialization
     mc_shutdown(&api_state.wm);
-    crystal_shutdown(&api_state.wm);
+    mr_shutdown(&api_state.wm);
 
     memset(&api_state, 0, sizeof(api_state));
-    fprintf(stderr, "[crystal_api] Crystal Compositor shut down\n");
+    fprintf(stderr, "[moonrock_api] MoonRock Compositor shut down\n");
 }
 
-bool crystal_api_is_active(void)
+bool mr_api_is_active(void)
 {
-    return api_state.initialized && crystal_is_active();
+    return api_state.initialized && mr_is_active();
 }
 
 // ============================================================================
 // Window list translation
 // ============================================================================
 //
-// The public API receives CrystalWindow arrays from the WM. We translate
-// these into the internal Client format so the existing crystal.c code can
+// The public API receives MRWindow arrays from the WM. We translate
+// these into the internal Client format so the existing moonrock.c code can
 // use them without modification.
 //
-// This is called at the start of each crystal_api_composite() call.
+// This is called at the start of each mr_api_composite() call.
 
-static void sync_clients_from_api(CrystalWindow *windows, int count)
+static void sync_clients_from_api(MRWindow *windows, int count)
 {
     // Clamp to our internal limit
     if (count > MAX_CLIENTS) {
         count = MAX_CLIENTS;
     }
 
-    // Rebuild the internal client list from the CrystalWindow array.
+    // Rebuild the internal client list from the MRWindow array.
     // We also track which client is focused so the shadow intensity is correct.
     api_state.wm.num_clients = count;
     api_state.wm.focused = NULL;
 
     for (int i = 0; i < count; i++) {
         Client *c = &api_state.wm.clients[i];
-        CrystalWindow *w = &windows[i];
+        MRWindow *w = &windows[i];
 
         c->frame   = w->window_id;
         c->client  = w->window_id;  // In API mode, frame == client
@@ -158,18 +158,18 @@ static void sync_clients_from_api(CrystalWindow *windows, int count)
         c->mapped  = true;          // Only visible windows are passed to us
         c->focused = w->focused;
 
-        // Translate CrystalWindowType to EWMH atom for internal z-order logic
+        // Translate MRWindowType to EWMH atom for internal z-order logic
         switch (w->type) {
-            case CRYSTAL_WINDOW_DESKTOP:
+            case MR_WINDOW_DESKTOP:
                 c->wm_type = api_state.wm.atom_net_wm_type_desktop;
                 break;
-            case CRYSTAL_WINDOW_DOCK:
+            case MR_WINDOW_DOCK:
                 c->wm_type = api_state.wm.atom_net_wm_type_dock;
                 break;
-            case CRYSTAL_WINDOW_POPUP:
+            case MR_WINDOW_POPUP:
                 c->wm_type = api_state.wm.atom_net_wm_type_normal;
                 break;
-            case CRYSTAL_WINDOW_NORMAL:
+            case MR_WINDOW_NORMAL:
             default:
                 c->wm_type = api_state.wm.atom_net_wm_type_normal;
                 break;
@@ -188,22 +188,22 @@ static void sync_clients_from_api(CrystalWindow *windows, int count)
 // Per-frame compositing
 // ============================================================================
 
-void crystal_api_composite(CrystalWindow *windows, int count)
+void mr_api_composite(MRWindow *windows, int count)
 {
     if (!api_state.initialized) return;
 
-    // Translate the public CrystalWindow array into the internal Client list
+    // Translate the public MRWindow array into the internal Client list
     sync_clients_from_api(windows, count);
 
     // Let the internal compositor do its thing — it reads from api_state.wm
     // to find windows, textures, stacking order, etc.
-    crystal_composite(&api_state.wm);
+    mr_composite(&api_state.wm);
 
     // Reset the dirty flag after compositing
     api_state.needs_composite = false;
 }
 
-bool crystal_api_needs_composite(void)
+bool mr_api_needs_composite(void)
 {
     if (!api_state.initialized) return false;
 
@@ -216,7 +216,7 @@ bool crystal_api_needs_composite(void)
         || mc_is_active();
 }
 
-void crystal_api_mark_dirty(void)
+void mr_api_mark_dirty(void)
 {
     api_state.needs_composite = true;
 }
@@ -225,7 +225,7 @@ void crystal_api_mark_dirty(void)
 // Animations
 // ============================================================================
 
-void crystal_api_minimize(Window texture_window, int dock_x, int dock_y)
+void mr_api_minimize(Window texture_window, int dock_x, int dock_y)
 {
     if (!api_state.initialized) return;
 
@@ -236,12 +236,12 @@ void crystal_api_minimize(Window texture_window, int dock_x, int dock_y)
     }
 
     if (c) {
-        crystal_animate_minimize(&api_state.wm, c, dock_x, dock_y);
+        mr_animate_minimize(&api_state.wm, c, dock_x, dock_y);
         api_state.needs_composite = true;
     }
 }
 
-void crystal_api_restore(Window texture_window, int dock_x, int dock_y)
+void mr_api_restore(Window texture_window, int dock_x, int dock_y)
 {
     if (!api_state.initialized) return;
 
@@ -251,12 +251,12 @@ void crystal_api_restore(Window texture_window, int dock_x, int dock_y)
     }
 
     if (c) {
-        crystal_animate_restore(&api_state.wm, c, dock_x, dock_y);
+        mr_animate_restore(&api_state.wm, c, dock_x, dock_y);
         api_state.needs_composite = true;
     }
 }
 
-void crystal_api_fade_in(Window texture_window, double duration_sec)
+void mr_api_fade_in(Window texture_window, double duration_sec)
 {
     if (!api_state.initialized) return;
 
@@ -271,7 +271,7 @@ void crystal_api_fade_in(Window texture_window, double duration_sec)
     api_state.needs_composite = true;
 }
 
-void crystal_api_fade_out(Window texture_window, double duration_sec)
+void mr_api_fade_out(Window texture_window, double duration_sec)
 {
     if (!api_state.initialized) return;
 
@@ -281,7 +281,7 @@ void crystal_api_fade_out(Window texture_window, double duration_sec)
     api_state.needs_composite = true;
 }
 
-bool crystal_api_animation_active(void)
+bool mr_api_animation_active(void)
 {
     if (!api_state.initialized) return false;
     return anim_any_active();
@@ -291,33 +291,33 @@ bool crystal_api_animation_active(void)
 // Mission Control
 // ============================================================================
 
-void crystal_api_toggle_mission_control(void)
+void mr_api_toggle_mission_control(void)
 {
     if (!api_state.initialized) return;
     mc_toggle(&api_state.wm);
     api_state.needs_composite = true;
 }
 
-bool crystal_api_mission_control_active(void)
+bool mr_api_mission_control_active(void)
 {
     if (!api_state.initialized) return false;
     return mc_is_active();
 }
 
-int crystal_api_add_space(void)
+int mr_api_add_space(void)
 {
     if (!api_state.initialized) return -1;
     return mc_add_space(&api_state.wm);
 }
 
-void crystal_api_switch_space(int space_id)
+void mr_api_switch_space(int space_id)
 {
     if (!api_state.initialized) return;
     mc_switch_space(&api_state.wm, space_id);
     api_state.needs_composite = true;
 }
 
-void crystal_api_move_to_space(Window win, int space_id)
+void mr_api_move_to_space(Window win, int space_id)
 {
     if (!api_state.initialized) return;
     mc_move_window_to_space(&api_state.wm, win, space_id);
@@ -328,12 +328,12 @@ void crystal_api_move_to_space(Window win, int space_id)
 // Event handling
 // ============================================================================
 
-bool crystal_api_handle_event(XEvent *ev)
+bool mr_api_handle_event(XEvent *ev)
 {
     if (!api_state.initialized || !ev) return false;
 
     // Let the core compositor handle damage events
-    if (crystal_handle_event(&api_state.wm, ev)) {
+    if (mr_handle_event(&api_state.wm, ev)) {
         api_state.needs_composite = true;
         return true;
     }
@@ -351,7 +351,7 @@ bool crystal_api_handle_event(XEvent *ev)
 // Display
 // ============================================================================
 
-float crystal_api_get_scale_factor(void)
+float mr_api_get_scale_factor(void)
 {
     if (!api_state.initialized) return 1.0f;
 
@@ -365,13 +365,13 @@ float crystal_api_get_scale_factor(void)
     return (float)dpi / 96.0f;
 }
 
-void crystal_api_set_rotation(int degrees)
+void mr_api_set_rotation(int degrees)
 {
     if (!api_state.initialized) return;
 
     // Validate rotation to one of the four cardinal angles
     if (degrees != 0 && degrees != 90 && degrees != 180 && degrees != 270) {
-        fprintf(stderr, "[crystal_api] Invalid rotation: %d (must be 0/90/180/270)\n",
+        fprintf(stderr, "[moonrock_api] Invalid rotation: %d (must be 0/90/180/270)\n",
                 degrees);
         return;
     }
@@ -387,13 +387,13 @@ void crystal_api_set_rotation(int degrees)
 // ARGB visual (for transparent frame windows)
 // ============================================================================
 
-bool crystal_api_get_argb_visual(Visual **out_visual, Colormap *out_colormap)
+bool mr_api_get_argb_visual(Visual **out_visual, Colormap *out_colormap)
 {
     if (!api_state.initialized) return false;
-    return crystal_create_argb_visual(&api_state.wm, out_visual, out_colormap);
+    return mr_create_argb_visual(&api_state.wm, out_visual, out_colormap);
 }
 
-void crystal_api_set_input_shape(Window frame, int chrome_x, int chrome_y,
+void mr_api_set_input_shape(Window frame, int chrome_x, int chrome_y,
                                   int chrome_w, int chrome_h)
 {
     if (!api_state.initialized) return;
@@ -407,5 +407,5 @@ void crystal_api_set_input_shape(Window frame, int chrome_x, int chrome_y,
     temp.w = chrome_w;
     temp.h = chrome_h;
 
-    crystal_set_input_shape(&api_state.wm, &temp);
+    mr_set_input_shape(&api_state.wm, &temp);
 }

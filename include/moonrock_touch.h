@@ -4,7 +4,7 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Touch Input & Display Rotation — header
+//  MoonRock Touch Input & Display Rotation — header
 // ============================================================================
 //
 // This module makes AuraOS work as a tablet-like experience on devices with
@@ -31,8 +31,8 @@
 //
 // ============================================================================
 
-#ifndef CRYSTAL_TOUCH_H
-#define CRYSTAL_TOUCH_H
+#ifndef MR_TOUCH_H
+#define MR_TOUCH_H
 
 #include <stdbool.h>
 #include <X11/Xlib.h>
@@ -183,4 +183,4 @@ bool touch_osk_visible(void);
 // Useful for drawing touch indicators (debug circles) on the compositor layer.
 TouchPoint *touch_get_points(int *count);
 
-#endif // CRYSTAL_TOUCH_H
+#endif // MR_TOUCH_H

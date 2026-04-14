@@ -14,8 +14,8 @@
 //   default fragment shader used for drawing window surfaces, the dock shelf,
 //   panel backgrounds, and any other textured quad.
 //
-// How it fits into Crystal Compositor:
-//   Crystal uses premultiplied alpha blending everywhere. That means the
+// How it fits into MoonRock Compositor:
+//   MoonRock uses premultiplied alpha blending everywhere. That means the
 //   RGB values in textures are already multiplied by their alpha channel.
 //   The OpenGL blend function is set to:
 //     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)

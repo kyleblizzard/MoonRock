@@ -4,31 +4,31 @@
 // via any medium, is strictly prohibited.
 
 // ============================================================================
-// wm_compat.h — Window Manager Compatibility Shim for Crystal Standalone
+// wm_compat.h — Window Manager Compatibility Shim for MoonRock Standalone
 // ============================================================================
 //
-// Crystal was originally developed inside AuraOS's window manager (aura-wm),
+// MoonRock was originally developed inside AuraOS's window manager (aura-wm),
 // where it had direct access to the WM's AuraWM and Client structs. When
-// Crystal was split into a standalone library, the internal code still
+// MoonRock was split into a standalone library, the internal code still
 // referenced those types throughout ~11,000 lines of C.
 //
 // Rather than rewriting every internal module to remove AuraWM/Client
 // references (which would be error-prone and break the existing code), we
 // provide this compatibility shim. It defines minimal versions of the types
-// that Crystal's internal code needs, with only the fields that are actually
+// that MoonRock's internal code needs, with only the fields that are actually
 // accessed.
 //
 // IMPORTANT: When building inside AuraOS (where wm.h defines the full
 // AuraWM and Client structs), this header detects that wm.h was already
 // included and skips its own struct definitions to avoid conflicts. It only
-// provides the struct definitions when building Crystal standalone.
+// provides the struct definitions when building MoonRock standalone.
 //
-// The public API (crystal_api.h) never exposes these types — users of
-// libcrystal only interact with CrystalWindow structs. The crystal_api.c
+// The public API (moonrock_api.h) never exposes these types — users of
+// libmoonrock only interact with MRWindow structs. The moonrock_api.c
 // adapter translates between the public API and these internal types.
 //
-// This header is INTERNAL to Crystal. Window managers should include
-// crystal_api.h instead.
+// This header is INTERNAL to MoonRock. Window managers should include
+// moonrock_api.h instead.
 // ============================================================================
 
 #ifndef WM_COMPAT_H
@@ -42,9 +42,9 @@
 // Detect if we're building inside AuraOS
 // ============================================================================
 //
-// When building Crystal modules as part of AuraOS (not standalone), the WM
+// When building MoonRock modules as part of AuraOS (not standalone), the WM
 // provides the real AuraWM and Client structs in wm.h. In that case, define
-// CRYSTAL_EMBEDDED_IN_WM at compile time (via -DCRYSTAL_EMBEDDED_IN_WM) and
+// MR_EMBEDDED_IN_WM at compile time (via -DMR_EMBEDDED_IN_WM) and
 // this header becomes a no-op — all types and functions come from the WM.
 //
 // We also check for AURA_WM_H (wm.h's include guard) as a fallback in case
@@ -52,19 +52,19 @@
 
 // When embedded in AuraOS, include the real wm.h (which provides AuraWM,
 // Client, and all WM functions) and skip our minimal definitions.
-#if defined(CRYSTAL_EMBEDDED_IN_WM) && !defined(AURA_WM_H)
+#if defined(MR_EMBEDDED_IN_WM) && !defined(AURA_WM_H)
 #include "wm.h"
 #include "ewmh.h"
 #endif
 
-#if !defined(CRYSTAL_EMBEDDED_IN_WM) && !defined(AURA_WM_H)
+#if !defined(MR_EMBEDDED_IN_WM) && !defined(AURA_WM_H)
 
 // ── Standalone mode: define our own minimal types ─────────────────────
 
-// Maximum number of windows Crystal can track simultaneously.
+// Maximum number of windows MoonRock can track simultaneously.
 #define MAX_CLIENTS 256
 
-// Frame geometry constants used by Crystal's session restore code.
+// Frame geometry constants used by MoonRock's session restore code.
 #define TITLEBAR_HEIGHT  22
 #define BORDER_WIDTH      1
 
@@ -72,7 +72,7 @@ typedef struct Client Client;
 typedef struct AuraWM AuraWM;
 
 // Client — minimal window description.
-// Crystal only accesses these fields from the full AuraOS Client struct.
+// MoonRock only accesses these fields from the full AuraOS Client struct.
 struct Client {
     Window client;       // The application's actual window
     Window frame;        // The WM's frame window (parent of client)
@@ -86,7 +86,7 @@ struct Client {
 };
 
 // AuraWM — minimal window manager state.
-// Crystal needs the X display, screen info, client list, and EWMH atoms.
+// MoonRock needs the X display, screen info, client list, and EWMH atoms.
 struct AuraWM {
     Display *dpy;
     int screen;
@@ -98,7 +98,7 @@ struct AuraWM {
     int num_clients;
     Client *focused;
 
-    // EWMH atoms that Crystal's internal code references
+    // EWMH atoms that MoonRock's internal code references
     Atom atom_net_wm_type;
     Atom atom_net_wm_type_normal;
     Atom atom_net_wm_type_dock;
@@ -135,6 +135,6 @@ void wm_focus_client(AuraWM *wm, Client *c);
 // Initialize EWMH atoms on the given display.
 void wm_compat_init_atoms(AuraWM *wm);
 
-#endif // !CRYSTAL_EMBEDDED_IN_WM && !AURA_WM_H
+#endif // !MR_EMBEDDED_IN_WM && !AURA_WM_H
 
 #endif // WM_COMPAT_H

@@ -13,7 +13,7 @@
 //   Transforms a unit quad (0,0)-(1,1) into screen-space coordinates and
 //   passes texture coordinates through to the fragment shader.
 //
-// How it fits into Crystal Compositor:
+// How it fits into MoonRock Compositor:
 //   Every visible element (windows, dock shelf, panels, overlays) is drawn
 //   as a textured quad. This vertex shader is shared by all of them. The
 //   fragment shader is swapped depending on what effect is needed (basic

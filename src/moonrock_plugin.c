@@ -4,22 +4,22 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Plugin & Theme Engine — implementation
+//  MoonRock Plugin & Theme Engine — implementation
 // ============================================================================
 //
 // This file implements the plugin system, theme engine, hot corners, window
 // rules, configuration file I/O, and the effects API described in
-// crystal_plugin.h. See that header for the full documentation of each
+// mr_plugin.h. See that header for the full documentation of each
 // public function.
 //
 // Internal structure:
 //
 //   - A fixed-size array of LoadedPlugin structs holds all active plugins.
 //     Each entry stores the dlopen() handle and a pointer to the plugin's
-//     exported CrystalPlugin interface struct.
+//     exported MRPlugin interface struct.
 //
 //   - A single ThemeDefinition holds the current theme. It is initialized
-//     with sensible Snow Leopard-inspired defaults so Crystal looks correct
+//     with sensible Snow Leopard-inspired defaults so MoonRock looks correct
 //     even if no theme file is loaded.
 //
 //   - Hot corners and window rules are stored in simple fixed-size arrays.
@@ -35,9 +35,9 @@
 // strict C99/C11 compilers). Include it before any system headers.
 #define _GNU_SOURCE
 
-#include "crystal_plugin.h"
-#include "crystal_shaders.h"  // Shader programs, FBO management, quad drawing
-#include "crystal.h"          // crystal_get_shaders(), crystal_get_projection()
+#include "moonrock_plugin.h"
+#include "moonrock_shaders.h"  // Shader programs, FBO management, quad drawing
+#include "moonrock.h"          // mr_get_shaders(), mr_get_projection()
 
 #include <stdio.h>      // fprintf, fopen, fclose, fgets, etc.
 #include <stdlib.h>     // atof, atoi, malloc, free, realpath
@@ -56,7 +56,7 @@
 // to call the lifecycle/hook functions.
 typedef struct {
     void          *handle;    // dlopen() handle (needed for dlclose)
-    CrystalPlugin *plugin;   // Pointer to the plugin's exported struct
+    MRPlugin *plugin;   // Pointer to the plugin's exported struct
 } LoadedPlugin;
 
 // ============================================================================
@@ -65,7 +65,7 @@ typedef struct {
 //
 // These are essentially global variables, but 'static' limits their visibility
 // to this file only. Other .c files cannot access them directly — they go
-// through the public API functions in crystal_plugin.h.
+// through the public API functions in mr_plugin.h.
 
 // Array of all loaded plugins, and how many are currently loaded
 static LoadedPlugin loaded_plugins[MAX_PLUGINS];
@@ -123,7 +123,7 @@ static void set_default_theme(void)
     current_theme.border_width  = 1.0f;
     current_theme.corner_radius = 5.0f;
 
-    // Shadow: matches the existing Crystal defaults (see crystal.h)
+    // Shadow: matches the existing MoonRock defaults (see moonrock.h)
     current_theme.shadow_radius         = 22.0f;
     current_theme.shadow_alpha_active   = 0.45f;
     current_theme.shadow_alpha_inactive = 0.22f;
@@ -351,7 +351,7 @@ void plugin_shutdown(void)
     // Reverse order is a good practice — if plugin B depends on plugin A,
     // unloading B first avoids dangling references.
     for (int i = plugin_count - 1; i >= 0; i--) {
-        CrystalPlugin *p = loaded_plugins[i].plugin;
+        MRPlugin *p = loaded_plugins[i].plugin;
 
         // Call the plugin's shutdown callback if it has one
         if (p && p->shutdown)
@@ -577,7 +577,7 @@ bool plugin_load(const char *path)
     // dlopen() loads the shared library into our process's address space.
     // RTLD_LAZY means symbols are resolved on first use, not all at once.
     // This is faster at load time and fine since we immediately look up the
-    // only symbol we need (crystal_plugin).
+    // only symbol we need (mr_plugin).
     void *handle = dlopen(path, RTLD_LAZY);
     if (!handle) {
         fprintf(stderr, "[plugin] Failed to load %s: %s\n", path, dlerror());
@@ -585,17 +585,17 @@ bool plugin_load(const char *path)
     }
 
     // dlsym() looks up a symbol (global variable or function) by name inside
-    // the loaded library. We expect every Crystal plugin to export a struct
-    // called "crystal_plugin" of type CrystalPlugin.
-    CrystalPlugin *plugin = (CrystalPlugin *)dlsym(handle, "crystal_plugin");
+    // the loaded library. We expect every MoonRock plugin to export a struct
+    // called "mr_plugin" of type MRPlugin.
+    MRPlugin *plugin = (MRPlugin *)dlsym(handle, "mr_plugin");
     if (!plugin) {
-        fprintf(stderr, "[plugin] %s has no 'crystal_plugin' symbol\n", path);
+        fprintf(stderr, "[plugin] %s has no 'mr_plugin' symbol\n", path);
         dlclose(handle);
         return false;
     }
 
     // SECURITY: validate that the plugin exports required fields. A plugin
-    // without a name or version is either corrupted or not a real Crystal plugin.
+    // without a name or version is either corrupted or not a real MoonRock plugin.
     if (!plugin->name || !plugin->version) {
         fprintf(stderr, "[plugin] SECURITY: plugin at '%s' missing required "
                 "name/version fields\n", path);
@@ -642,7 +642,7 @@ void plugin_unload(const char *name)
 {
     // Search for a loaded plugin matching the given name
     for (int i = 0; i < plugin_count; i++) {
-        CrystalPlugin *p = loaded_plugins[i].plugin;
+        MRPlugin *p = loaded_plugins[i].plugin;
 
         // Skip if this plugin has no name or doesn't match
         if (!p || !p->name || strcmp(p->name, name) != 0)
@@ -1082,7 +1082,7 @@ bool plugin_save_config(const char *path)
 // ============================================================================
 //
 // These functions provide ready-made visual effects for plugins. They use
-// Crystal's shader pipeline (crystal_shaders.h) for GPU-accelerated processing.
+// MoonRock's shader pipeline (moonrock_shaders.h) for GPU-accelerated processing.
 // Each effect renders into one or more FBOs (off-screen textures) and returns
 // the result by modifying the input texture in place.
 //
@@ -1103,15 +1103,15 @@ void plugin_effect_blur(GLuint texture, int x, int y, int w, int h,
 
     if (radius <= 0.0f) return;  // No blur to apply
 
-    // Get the compiled shader programs from Crystal's global state
-    ShaderPrograms *progs = crystal_get_shaders();
+    // Get the compiled shader programs from MoonRock's global state
+    ShaderPrograms *progs = mr_get_shaders();
     if (!progs || !progs->blur_h || !progs->blur_v) {
         fprintf(stderr, "[plugin] effect_blur: blur shaders not available\n");
         return;
     }
 
     // Get the projection matrix so we can set up the shader's coordinate system
-    float *projection = crystal_get_projection();
+    float *projection = mr_get_projection();
     if (!projection) {
         fprintf(stderr, "[plugin] effect_blur: projection not available\n");
         return;
@@ -1201,7 +1201,7 @@ void plugin_effect_desaturate(GLuint texture, float amount)
 
     if (amount <= 0.0f) return;  // No desaturation needed
 
-    ShaderPrograms *progs = crystal_get_shaders();
+    ShaderPrograms *progs = mr_get_shaders();
     if (!progs || !progs->desaturate) {
         fprintf(stderr, "[plugin] effect_desaturate: shader not available\n");
         return;
@@ -1270,7 +1270,7 @@ void plugin_effect_tint(GLuint texture, float r, float g, float b,
 
     if (amount <= 0.0f) return;  // No tint needed
 
-    ShaderPrograms *progs = crystal_get_shaders();
+    ShaderPrograms *progs = mr_get_shaders();
     if (!progs || !progs->tint) {
         fprintf(stderr, "[plugin] effect_tint: shader not available\n");
         return;
@@ -1331,13 +1331,13 @@ void plugin_effect_scale(GLuint texture, float scale)
 
     if (scale == 1.0f) return;  // No scaling needed
 
-    ShaderPrograms *progs = crystal_get_shaders();
+    ShaderPrograms *progs = mr_get_shaders();
     if (!progs || !progs->basic) {
         fprintf(stderr, "[plugin] effect_scale: basic shader not available\n");
         return;
     }
 
-    float *projection = crystal_get_projection();
+    float *projection = mr_get_projection();
     if (!projection) {
         fprintf(stderr, "[plugin] effect_scale: projection not available\n");
         return;
@@ -1384,7 +1384,7 @@ void plugin_effect_scale(GLuint texture, float scale)
 void plugin_run_pre_composite(int screen_w, int screen_h)
 {
     for (int i = 0; i < plugin_count; i++) {
-        CrystalPlugin *p = loaded_plugins[i].plugin;
+        MRPlugin *p = loaded_plugins[i].plugin;
         if (p && p->pre_composite)
             p->pre_composite(screen_w, screen_h);
     }
@@ -1393,7 +1393,7 @@ void plugin_run_pre_composite(int screen_w, int screen_h)
 void plugin_run_post_composite(int screen_w, int screen_h)
 {
     for (int i = 0; i < plugin_count; i++) {
-        CrystalPlugin *p = loaded_plugins[i].plugin;
+        MRPlugin *p = loaded_plugins[i].plugin;
         if (p && p->post_composite)
             p->post_composite(screen_w, screen_h);
     }
@@ -1402,7 +1402,7 @@ void plugin_run_post_composite(int screen_w, int screen_h)
 void plugin_run_window_effect(GLuint texture, int x, int y, int w, int h)
 {
     for (int i = 0; i < plugin_count; i++) {
-        CrystalPlugin *p = loaded_plugins[i].plugin;
+        MRPlugin *p = loaded_plugins[i].plugin;
         if (p && p->window_effect)
             p->window_effect(texture, x, y, w, h);
     }

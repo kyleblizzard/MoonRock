@@ -4,11 +4,11 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Animation Framework — implementation
+//  MoonRock Animation Framework — implementation
 // ============================================================================
 //
 // This file implements the generalized animation system described in
-// crystal_anim.h. The core idea is simple:
+// moonrock_anim.h. The core idea is simple:
 //
 //   1. A fixed-size array holds up to MAX_ANIMATIONS active animations.
 //   2. Each frame, anim_update() computes how far along each animation is
@@ -28,8 +28,8 @@
 // Without this, M_PI is not available on strict C99/C11 compilers.
 #define _GNU_SOURCE
 
-#include "crystal_anim.h"
-#include "crystal_shaders.h"
+#include "moonrock_anim.h"
+#include "moonrock_shaders.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -160,7 +160,7 @@ void anim_init(void)
     // Zero out the entire array. This sets every slot's 'active' flag to false
     // and every 'type' to ANIM_NONE, so all slots are available.
     memset(animations, 0, sizeof(animations));
-    fprintf(stderr, "[crystal_anim] Animation system initialized (%d slots)\n",
+    fprintf(stderr, "[moonrock_anim] Animation system initialized (%d slots)\n",
             MAX_ANIMATIONS);
 }
 
@@ -172,7 +172,7 @@ void anim_shutdown(void)
         animations[i].active = false;
         animations[i].type = ANIM_NONE;
     }
-    fprintf(stderr, "[crystal_anim] Animation system shut down\n");
+    fprintf(stderr, "[moonrock_anim] Animation system shut down\n");
 }
 
 
@@ -199,7 +199,7 @@ int anim_start(AnimType type, EaseType easing, double duration,
     // If all slots are occupied, we cannot start a new animation.
     // This should be rare — 16 simultaneous animations is a lot.
     if (slot < 0) {
-        fprintf(stderr, "[crystal_anim] WARNING: all %d animation slots full, "
+        fprintf(stderr, "[moonrock_anim] WARNING: all %d animation slots full, "
                 "cannot start animation type %d\n", MAX_ANIMATIONS, type);
         return -1;
     }
@@ -241,7 +241,7 @@ int anim_start(AnimType type, EaseType easing, double duration,
     // Activate the slot — anim_update() and anim_draw() will now process it.
     a->active = true;
 
-    fprintf(stderr, "[crystal_anim] Started animation type %d in slot %d "
+    fprintf(stderr, "[moonrock_anim] Started animation type %d in slot %d "
             "(duration=%.2fs, easing=%d)\n", type, slot, duration, easing);
 
     return slot;
@@ -574,7 +574,7 @@ void anim_cancel_for_texture(GLuint texture)
         if (animations[i].active && animations[i].texture == texture) {
             animations[i].active = false;
             animations[i].type = ANIM_NONE;
-            fprintf(stderr, "[crystal_anim] Cancelled animation in slot %d "
+            fprintf(stderr, "[moonrock_anim] Cancelled animation in slot %d "
                     "(texture %u destroyed)\n", i, texture);
         }
     }

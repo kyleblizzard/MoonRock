@@ -4,10 +4,10 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Robust — production hardening for the Crystal Compositor
+//  MoonRock Robust — production hardening for the MoonRock Compositor
 // ============================================================================
 //
-// This file implements all the "boring but critical" features that turn Crystal
+// This file implements all the "boring but critical" features that turn MoonRock
 // from a cool demo into something you can actually use as your daily driver:
 //
 //   - Structured logging with timestamps, levels, and optional file output
@@ -16,7 +16,7 @@
 //   - Session state persistence (save/restore window positions across reboots)
 //   - Power management (detect battery, reduce effects to save power)
 //   - AT-SPI accessibility registration (placeholder for screen readers)
-//   - Memory safety macros (defined in the header, used throughout Crystal)
+//   - Memory safety macros (defined in the header, used throughout MoonRock)
 //
 // Each subsystem is independent — if one fails to initialize, the others
 // still work. The only thing that always succeeds is logging, because we
@@ -29,7 +29,7 @@
 //   - Various string functions
 #define _GNU_SOURCE
 
-#include "crystal_robust.h"
+#include "moonrock_robust.h"
 #include "wm_compat.h"
 
 #include <stdarg.h>      // va_list, va_start, va_end for variadic logging
@@ -195,16 +195,16 @@ void robust_set_log_file(const char *path)
 //  Crash recovery (fallback mode)
 // ============================================================================
 //
-// When Crystal detects a fatal GL error, it calls robust_enter_fallback_mode()
+// When MoonRock detects a fatal GL error, it calls robust_enter_fallback_mode()
 // to gracefully degrade. This does three things:
 //
 //   1. Calls XCompositeUnredirectSubwindows() to tell the X server to paint
 //      windows directly to the screen again (instead of to off-screen pixmaps
-//      that Crystal was compositing).
+//      that MoonRock was compositing).
 //
 //   2. Flushes the display to make the change take effect immediately.
 //
-//   3. Sets a flag so the rest of Crystal knows to skip all rendering.
+//   3. Sets a flag so the rest of MoonRock knows to skip all rendering.
 //
 // The result: the user sees their windows without shadows or animations, but
 // everything is still usable. Much better than a black screen or a crash.
@@ -219,14 +219,14 @@ void robust_enter_fallback_mode(Display *dpy, Window root)
         return;
     }
 
-    robust_log(LOG_ERROR, "crystal",
+    robust_log(LOG_ERROR, "moonrock",
                "FATAL: Entering fallback mode — compositing disabled");
 
     // Check that we have a valid display and root window before touching X11.
     if (dpy && root != None) {
         // Tell the X server to stop redirecting windows to off-screen pixmaps.
         // CompositeRedirectManual was what we used when setting up compositing
-        // in crystal.c — this reverses it. Windows now paint directly to the
+        // in moonrock.c — this reverses it. Windows now paint directly to the
         // screen, bypassing our compositor entirely.
         XCompositeUnredirectSubwindows(dpy, root, CompositeRedirectManual);
 
@@ -237,12 +237,12 @@ void robust_enter_fallback_mode(Display *dpy, Window root)
         XSync(dpy, False);
     }
 
-    // Set the flag so all Crystal rendering code knows to skip compositing.
+    // Set the flag so all MoonRock rendering code knows to skip compositing.
     fallback_mode = true;
 
-    robust_log(LOG_WARN, "crystal",
+    robust_log(LOG_WARN, "moonrock",
                "Fallback mode active. Windows render directly via X server.");
-    robust_log(LOG_WARN, "crystal",
+    robust_log(LOG_WARN, "moonrock",
                "Restart aura-wm to attempt to restore compositing.");
 }
 
@@ -269,7 +269,7 @@ bool robust_is_fallback(void)
 
 void robust_setup_hardware_cursor(Display *dpy)
 {
-    CRYSTAL_CHECK_NULL(dpy, );
+    MR_CHECK_NULL(dpy, );
 
     // Check if the XFixes extension is available on this X server.
     // Not all X servers support it (though in practice, every modern one does).
@@ -316,7 +316,7 @@ void robust_setup_hardware_cursor(Display *dpy)
 
 static bool ensure_directory(const char *dir_path)
 {
-    CRYSTAL_CHECK_NULL(dir_path, false);
+    MR_CHECK_NULL(dir_path, false);
 
     // Try to create the directory. If it already exists, mkdir returns -1
     // and errno is set to EEXIST — that's fine, not an error for us.
@@ -374,11 +374,11 @@ static const char *default_session_path(void)
 
 bool robust_save_session(AuraWM *wm, const char *path)
 {
-    CRYSTAL_CHECK_NULL(wm, false);
+    MR_CHECK_NULL(wm, false);
 
     // Use the default path if none was provided.
     if (!path) path = default_session_path();
-    CRYSTAL_CHECK_NULL(path, false);
+    MR_CHECK_NULL(path, false);
 
     // Make sure the parent directory (~/.config/aura-wm/) exists.
     // We need to extract the directory portion of the path.
@@ -412,7 +412,7 @@ bool robust_save_session(AuraWM *wm, const char *path)
     // Write a header comment so the file is self-documenting.
     fprintf(f, "# AuraOS session state — saved window positions\n");
     fprintf(f, "# Format: wm_class|x|y|w|h|space_index\n");
-    fprintf(f, "# Auto-generated by Crystal Compositor. Safe to edit by hand.\n");
+    fprintf(f, "# Auto-generated by MoonRock Compositor. Safe to edit by hand.\n");
 
     int saved_count = 0;
 
@@ -465,11 +465,11 @@ bool robust_save_session(AuraWM *wm, const char *path)
 
 bool robust_restore_session(AuraWM *wm, const char *path)
 {
-    CRYSTAL_CHECK_NULL(wm, false);
+    MR_CHECK_NULL(wm, false);
 
     // Use the default path if none was provided.
     if (!path) path = default_session_path();
-    CRYSTAL_CHECK_NULL(path, false);
+    MR_CHECK_NULL(path, false);
 
     // Check if the file exists before trying to open it. On a fresh install
     // there won't be a session file, and that's perfectly normal.
@@ -722,7 +722,7 @@ bool robust_init(Display *dpy, int screen)
     // Logging is always available (it was set up statically), so we can
     // log right from the start.
     robust_log(LOG_INFO, "robust",
-               "Initializing Crystal robustness layer (screen %d)", screen);
+               "Initializing MoonRock robustness layer (screen %d)", screen);
 
     // --- Hardware cursor ---
     // Set up the hardware cursor early so it is smooth from the very first

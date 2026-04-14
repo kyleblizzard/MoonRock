@@ -4,7 +4,7 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Touch Input & Display Rotation — implementation
+//  MoonRock Touch Input & Display Rotation — implementation
 // ============================================================================
 //
 // This file implements multitouch input handling for AuraOS using XInput2.
@@ -35,7 +35,7 @@
 // _GNU_SOURCE gives us access to M_PI and other POSIX extensions from <math.h>.
 #define _GNU_SOURCE
 
-#include "crystal_touch.h"
+#include "moonrock_touch.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -675,7 +675,7 @@ void touch_set_rotation(RotationAngle angle)
     }
 
     // Note: The compositor must re-setup its GL projection matrix after this.
-    // Crystal's render loop should call touch_get_rotation() when building
+    // MoonRock's render loop should call touch_get_rotation() when building
     // the orthographic projection and glViewport to apply the rotation.
 }
 

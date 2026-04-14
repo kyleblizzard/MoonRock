@@ -4,16 +4,16 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Compositor — AuraOS's custom OpenGL X11 compositor
+//  MoonRock Compositor — AuraOS's custom OpenGL X11 compositor
 // ============================================================================
 //
-// Crystal replaces the old compositor.h/compositor.c module (which used Cairo
+// MoonRock replaces the old compositor.h/compositor.c module (which used Cairo
 // to paint shadows into oversized ARGB frame windows) and also eliminates the
 // need for picom or any external compositor. Everything happens in-process.
 //
-// Why "Crystal"?
+// Why "MoonRock"?
 //   Apple's macOS uses "Quartz Compositor" for its window compositing engine.
-//   Crystal is our playful nod to that — a different kind of clear, beautiful
+//   MoonRock is our playful nod to that — a different kind of clear, beautiful
 //   mineral. It fits the AuraOS aesthetic of recreating the Snow Leopard look
 //   and feel on Linux with our own technology.
 //
@@ -31,7 +31,7 @@
 //
 // How the rendering pipeline works (high level):
 //
-//   1. REDIRECT — At startup, Crystal calls XCompositeRedirectSubwindows() in
+//   1. REDIRECT — At startup, MoonRock calls XCompositeRedirectSubwindows() in
 //      "manual" mode. This tells the X server to stop painting windows directly
 //      to the screen. Instead, each window's pixels are rendered into an
 //      off-screen pixmap that we can read from.
@@ -70,8 +70,8 @@
 //
 // ============================================================================
 
-#ifndef AURA_CRYSTAL_H
-#define AURA_CRYSTAL_H
+#ifndef MOONROCK_H
+#define MOONROCK_H
 
 #include "wm_compat.h"
 #include <stdbool.h>
@@ -116,7 +116,7 @@
 //  Initialization and shutdown
 // ============================================================================
 
-// Initialize the Crystal compositor.
+// Initialize the MoonRock compositor.
 //
 // This does all the heavy lifting to get compositing running:
 //   1. Checks that the X server supports XComposite, XDamage, and XFixes.
@@ -132,18 +132,18 @@
 //
 // Returns true on success, false if a required extension is missing or
 // the GL context could not be created.
-bool crystal_init(AuraWM *wm);
+bool mr_init(AuraWM *wm);
 
-// Shut down Crystal and clean up all resources.
+// Shut down MoonRock and clean up all resources.
 //
-// This undoes everything crystal_init() set up:
+// This undoes everything mr_init() set up:
 //   - Calls XCompositeUnredirectSubwindows() so windows paint normally again.
 //   - Destroys all OpenGL textures we created for window pixmaps.
 //   - Destroys the GLX context.
 //   - Frees the Gaussian blur kernel and any other allocated memory.
 //
 // After this call, windows will render directly to the screen (no compositing).
-void crystal_shutdown(AuraWM *wm);
+void mr_shutdown(AuraWM *wm);
 
 
 // ============================================================================
@@ -164,57 +164,57 @@ void crystal_shutdown(AuraWM *wm);
 //
 // The caller (main event loop) should call this whenever there is damage to
 // process, or whenever an animation is in progress.
-void crystal_composite(AuraWM *wm);
+void mr_composite(AuraWM *wm);
 
 
 // ============================================================================
 //  Window lifecycle
 // ============================================================================
 //
-// These functions keep Crystal in sync with the window manager. Every time a
+// These functions keep MoonRock in sync with the window manager. Every time a
 // window appears, disappears, changes size, or repaints, the WM must notify
-// Crystal so it can create, destroy, or update the corresponding GL texture.
+// MoonRock so it can create, destroy, or update the corresponding GL texture.
 
 // A new window has been mapped (made visible on screen).
 //
-// Crystal will:
+// MoonRock will:
 //   - Call XCompositeNameWindowPixmap() to get the window's off-screen pixmap.
 //   - Bind that pixmap as an OpenGL texture via glXBindTexImageEXT().
 //   - Register an XDamage object on the window to track content changes.
 //
 // Call this from the MapNotify handler after framing the window.
-void crystal_window_mapped(AuraWM *wm, Client *c);
+void mr_window_mapped(AuraWM *wm, Client *c);
 
 // A window has been unmapped (hidden) or destroyed.
 //
-// Crystal will:
+// MoonRock will:
 //   - Release the GL texture bound to the window's pixmap.
 //   - Free the XComposite pixmap.
 //   - Destroy the XDamage tracking object for this window.
 //
 // Call this from the UnmapNotify or DestroyNotify handler.
-void crystal_window_unmapped(AuraWM *wm, Client *c);
+void mr_window_unmapped(AuraWM *wm, Client *c);
 
 // A window's contents have changed (we received an XDamage event for it).
 //
-// Crystal marks the window's texture as "dirty." On the next call to
-// crystal_composite(), the texture will be re-bound from the updated pixmap
+// MoonRock marks the window's texture as "dirty." On the next call to
+// mr_composite(), the texture will be re-bound from the updated pixmap
 // before drawing. This avoids re-binding every texture every frame.
 //
 // Call this from the DamageNotify event handler.
-void crystal_window_damaged(AuraWM *wm, Client *c);
+void mr_window_damaged(AuraWM *wm, Client *c);
 
 // A window has been resized (ConfigureNotify with new dimensions).
 //
 // When a window changes size, its off-screen pixmap is invalidated by the X
-// server and a new one is allocated. Crystal must:
+// server and a new one is allocated. MoonRock must:
 //   - Release the old GL texture.
 //   - Get the new pixmap via XCompositeNameWindowPixmap().
 //   - Bind the new pixmap as a fresh GL texture.
 //
 // Call this from the ConfigureNotify handler after updating the Client's
 // geometry (c->w and c->h).
-void crystal_window_resized(AuraWM *wm, Client *c);
+void mr_window_resized(AuraWM *wm, Client *c);
 
 
 // ============================================================================
@@ -238,7 +238,7 @@ void crystal_window_resized(AuraWM *wm, Client *c);
 //               visual to have its own colormap).
 //
 // Returns true if a suitable visual was found, false otherwise.
-bool crystal_create_argb_visual(AuraWM *wm, Visual **out_visual,
+bool mr_create_argb_visual(AuraWM *wm, Visual **out_visual,
                                 Colormap *out_colormap);
 
 // Set the X input shape on a frame window so mouse clicks pass through the
@@ -251,7 +251,7 @@ bool crystal_create_argb_visual(AuraWM *wm, Visual **out_visual,
 // excluding the shadow padding on all four sides.
 //
 // Call this after framing a window and after any resize.
-void crystal_set_input_shape(AuraWM *wm, Client *c);
+void mr_set_input_shape(AuraWM *wm, Client *c);
 
 
 // ============================================================================
@@ -260,18 +260,18 @@ void crystal_set_input_shape(AuraWM *wm, Client *c);
 
 // Process an X event that might be compositor-related.
 //
-// Crystal handles these event types:
+// MoonRock handles these event types:
 //   - DamageNotify: a window's contents changed; mark its texture dirty.
 //   - (Future) Any custom events from GLX or other extensions.
 //
-// Returns true if Crystal consumed the event (caller should not process it
+// Returns true if MoonRock consumed the event (caller should not process it
 // further), or false if the event is not compositor-related and should be
 // handled by the normal WM event loop.
 //
 // Usage in the main loop:
-//   if (crystal_handle_event(wm, &event)) continue;  // Crystal handled it
+//   if (mr_handle_event(wm, &event)) continue;  // MoonRock handled it
 //   // ... normal event dispatch ...
-bool crystal_handle_event(AuraWM *wm, XEvent *e);
+bool mr_handle_event(AuraWM *wm, XEvent *e);
 
 
 // ============================================================================
@@ -293,7 +293,7 @@ bool crystal_handle_event(AuraWM *wm, XEvent *e);
 // animation finishes, the window is fully hidden.
 //
 // dock_icon_x, dock_icon_y: the screen coordinates of the target dock icon.
-void crystal_animate_minimize(AuraWM *wm, Client *c,
+void mr_animate_minimize(AuraWM *wm, Client *c,
                               int dock_icon_x, int dock_icon_y);
 
 // Start the genie restore animation (un-minimize) for a window.
@@ -302,65 +302,65 @@ void crystal_animate_minimize(AuraWM *wm, Client *c,
 // dock icon position back to its normal size and location.
 //
 // dock_icon_x, dock_icon_y: the screen coordinates of the source dock icon.
-void crystal_animate_restore(AuraWM *wm, Client *c,
+void mr_animate_restore(AuraWM *wm, Client *c,
                              int dock_icon_x, int dock_icon_y);
 
 // Check if any animation is currently in progress.
 //
 // When an animation is active, the main loop should keep calling
-// crystal_composite() at the display's refresh rate (typically 60 Hz) to
+// mr_composite() at the display's refresh rate (typically 60 Hz) to
 // advance the animation smoothly. When no animation is active, we only need
 // to composite when there is XDamage (saving CPU/GPU).
 //
 // Returns true if at least one animation is still playing.
-bool crystal_animation_active(AuraWM *wm);
+bool mr_animation_active(AuraWM *wm);
 
 
 // ============================================================================
 //  State query
 // ============================================================================
 
-// Check whether Crystal initialized successfully and is actively compositing.
+// Check whether MoonRock initialized successfully and is actively compositing.
 //
 // Other modules (e.g., frame.c, decor.c) use this to decide whether to create
 // ARGB frame windows with shadow padding, or fall back to simple frames
 // without compositing effects.
 //
-// Returns true if crystal_init() succeeded, false otherwise.
-bool crystal_is_active(void);
+// Returns true if mr_init() succeeded, false otherwise.
+bool mr_is_active(void);
 
 // Get the XDamage event base number.
 //
 // X extensions define their own event types starting at a "base" offset that
 // is assigned at runtime (it varies between X servers and depends on which
 // extensions are loaded). To identify a DamageNotify event in the main loop,
-// we compare: event.type == crystal_get_damage_event_base() + XDamageNotify.
+// we compare: event.type == mr_get_damage_event_base() + XDamageNotify.
 //
-// The main event loop uses this to route damage events to crystal_handle_event().
-int crystal_get_damage_event_base(void);
+// The main event loop uses this to route damage events to mr_handle_event().
+int mr_get_damage_event_base(void);
 
 
 // ============================================================================
 //  Shader and texture accessors
 // ============================================================================
 //
-// These let other Crystal modules (Mission Control, animations, plugins)
+// These let other MoonRock modules (Mission Control, animations, plugins)
 // access the compositor's shader programs and per-frame projection matrix
-// without reaching into the static crystal struct directly.
+// without reaching into the static moonrock struct directly.
 
-#include "crystal_shaders.h"
+#include "moonrock_shaders.h"
 
-// Get a pointer to Crystal's compiled shader programs.
-// Returns NULL if Crystal is not initialized.
-ShaderPrograms *crystal_get_shaders(void);
+// Get a pointer to MoonRock's compiled shader programs.
+// Returns NULL if MoonRock is not initialized.
+ShaderPrograms *mr_get_shaders(void);
 
 // Get the current frame's 4x4 orthographic projection matrix.
 // Returns a pointer to a float[16] in column-major order.
-float *crystal_get_projection(void);
+float *mr_get_projection(void);
 
 // Look up a window's GL texture handle by its X window ID.
 // Returns the GL texture handle, or 0 if the window isn't tracked.
 // Used by Mission Control to render window thumbnails in the overview.
-GLuint crystal_get_window_texture_id(Window xwin);
+GLuint mr_get_window_texture_id(Window xwin);
 
-#endif // AURA_CRYSTAL_H
+#endif // MOONROCK_H

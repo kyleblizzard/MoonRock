@@ -4,10 +4,10 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Robust — production hardening for the Crystal Compositor
+//  MoonRock Robust — production hardening for the MoonRock Compositor
 // ============================================================================
 //
-// This module is the "last mile" that makes Crystal ready for daily use. It
+// This module is the "last mile" that makes MoonRock ready for daily use. It
 // wraps up all the small-but-critical things a real compositor needs:
 //
 //   1. Crash recovery — if OpenGL dies, gracefully fall back to unredirected
@@ -31,8 +31,8 @@
 //
 // ============================================================================
 
-#ifndef CRYSTAL_ROBUST_H
-#define CRYSTAL_ROBUST_H
+#ifndef MR_ROBUST_H
+#define MR_ROBUST_H
 
 #include <stdbool.h>
 #include <X11/Xlib.h>
@@ -61,7 +61,7 @@ typedef enum {
 //  Initialization and shutdown
 // ============================================================================
 
-// Initialize all robustness subsystems. Call this once during Crystal startup,
+// Initialize all robustness subsystems. Call this once during MoonRock startup,
 // after the X11 display and screen are available but before the main loop.
 //
 // Parameters:
@@ -95,7 +95,7 @@ void robust_shutdown(void);
 //
 // Parameters:
 //   level  — severity of the message (LOG_DEBUG through LOG_ERROR)
-//   module — short string identifying the source (e.g. "crystal", "session")
+//   module — short string identifying the source (e.g. "moonrock", "session")
 //   fmt    — printf-style format string
 //   ...    — arguments matching the format string
 void robust_log(LogLevel level, const char *module, const char *fmt, ...);
@@ -114,7 +114,7 @@ void robust_set_log_file(const char *path);
 //  Crash recovery (fallback mode)
 // ============================================================================
 //
-// If Crystal encounters a fatal GL error (shader compilation failure, context
+// If MoonRock encounters a fatal GL error (shader compilation failure, context
 // loss, etc.), calling robust_enter_fallback_mode() gracefully degrades the
 // desktop. It un-redirects all windows so the X server paints them directly
 // to the screen — no compositing effects, but the user can still work.
@@ -240,24 +240,24 @@ bool robust_init_accessibility(void);
 // return a safe default value.
 //
 // Usage:
-//   CRYSTAL_CHECK_NULL(ptr, return_value)
+//   MR_CHECK_NULL(ptr, return_value)
 //     — If ptr is NULL, log the error with file/line and return return_value.
 //
-//   CRYSTAL_CHECK_BOUNDS(index, max, return_value)
+//   MR_CHECK_BOUNDS(index, max, return_value)
 //     — If index is out of range [0, max), log and return return_value.
 //
 // The "ret" parameter lets you use these in functions with different return
 // types. For void functions, pass nothing:
-//   CRYSTAL_CHECK_NULL(ptr, );       // returns void
-//   CRYSTAL_CHECK_NULL(ptr, false);  // returns false
-//   CRYSTAL_CHECK_NULL(ptr, -1);     // returns -1
+//   MR_CHECK_NULL(ptr, );       // returns void
+//   MR_CHECK_NULL(ptr, false);  // returns false
+//   MR_CHECK_NULL(ptr, -1);     // returns -1
 
 // Check that a pointer is not NULL. If it is, log an error with the variable
 // name, file, and line number, then return the given value.
-#define CRYSTAL_CHECK_NULL(ptr, ret) \
+#define MR_CHECK_NULL(ptr, ret) \
     do { \
         if (!(ptr)) { \
-            robust_log(LOG_ERROR, "crystal", \
+            robust_log(LOG_ERROR, "moonrock", \
                        "NULL pointer: %s at %s:%d", \
                        #ptr, __FILE__, __LINE__); \
             return ret; \
@@ -266,10 +266,10 @@ bool robust_init_accessibility(void);
 
 // Check that an index is within bounds [0, max). If it is out of range,
 // log an error with the index value and maximum, then return the given value.
-#define CRYSTAL_CHECK_BOUNDS(idx, max, ret) \
+#define MR_CHECK_BOUNDS(idx, max, ret) \
     do { \
         if ((idx) < 0 || (idx) >= (max)) { \
-            robust_log(LOG_ERROR, "crystal", \
+            robust_log(LOG_ERROR, "moonrock", \
                        "Bounds check failed: %s=%d, max=%d at %s:%d", \
                        #idx, (idx), (max), __FILE__, __LINE__); \
             return ret; \
@@ -277,4 +277,4 @@ bool robust_init_accessibility(void);
     } while (0)
 
 
-#endif // CRYSTAL_ROBUST_H
+#endif // MR_ROBUST_H

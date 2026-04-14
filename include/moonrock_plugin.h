@@ -4,7 +4,7 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Plugin & Theme Engine — header
+//  MoonRock Plugin & Theme Engine — header
 // ============================================================================
 //
 // This module gives AuraOS a way to be customized and extended by the user:
@@ -15,7 +15,7 @@
 //                      text file that anyone can edit.
 //
 //   2. Plugin loader — Loads .so shared libraries at runtime using dlopen().
-//                      Each plugin exports a CrystalPlugin struct that hooks
+//                      Each plugin exports a MRPlugin struct that hooks
 //                      into the compositing pipeline. Plugins can run custom
 //                      GL code before/after compositing, or per-window.
 //
@@ -34,9 +34,9 @@
 //
 // Why dlopen for plugins?
 //   dlopen() is the POSIX standard for loading shared libraries at runtime. It
-//   lets us load a .so file, look up a symbol by name (the CrystalPlugin struct),
+//   lets us load a .so file, look up a symbol by name (the MRPlugin struct),
 //   and call functions from it — all without recompiling the compositor. Plugins
-//   are optional: if none are installed, Crystal works exactly the same.
+//   are optional: if none are installed, MoonRock works exactly the same.
 //
 // ============================================================================
 
@@ -52,8 +52,8 @@
 // but it means a malicious or buggy plugin can crash or compromise the
 // entire compositor process.
 
-#ifndef CRYSTAL_PLUGIN_H
-#define CRYSTAL_PLUGIN_H
+#ifndef MR_PLUGIN_H
+#define MR_PLUGIN_H
 
 #include <stdbool.h>
 #include <GL/gl.h>
@@ -172,7 +172,7 @@ typedef enum {
 //
 // A ThemeDefinition holds every visual property that can be customized through
 // a .theme file. These values feed directly into the compositor's rendering:
-// decor.c uses them for title bar gradients and borders, crystal.c uses them
+// decor.c uses them for title bar gradients and borders, moonrock.c uses them
 // for shadow parameters, and so on.
 //
 // All color values are RGB floats in the 0.0-1.0 range. Having separate "top"
@@ -265,7 +265,7 @@ typedef struct {
 // ============================================================================
 //
 // This is the struct that a .so plugin must export as a global symbol named
-// "crystal_plugin". The compositor uses dlsym() to find it, then calls the
+// "mr_plugin". The compositor uses dlsym() to find it, then calls the
 // lifecycle and hook functions at the appropriate times.
 //
 // A minimal plugin looks like:
@@ -274,7 +274,7 @@ typedef struct {
 //   static void my_shutdown(void) { }
 //   static void my_post(int w, int h) { /* draw overlay */ }
 //
-//   CrystalPlugin crystal_plugin = {
+//   MRPlugin mr_plugin = {
 //       .name    = "My Plugin",
 //       .version = "1.0",
 //       .author  = "Someone",
@@ -295,11 +295,11 @@ typedef struct {
     bool (*init)(void);              // Called once when the plugin is loaded
     void (*shutdown)(void);          // Called once when the plugin is unloaded
 
-    // Composite hooks — called by Crystal at specific points each frame
+    // Composite hooks — called by MoonRock at specific points each frame
     void (*pre_composite)(int screen_w, int screen_h);   // Before any windows
     void (*post_composite)(int screen_w, int screen_h);  // After all windows
     void (*window_effect)(GLuint texture, int x, int y, int w, int h); // Per-window
-} CrystalPlugin;
+} MRPlugin;
 
 
 // ============================================================================
@@ -364,7 +364,7 @@ ThemeDefinition *plugin_get_theme(void);
 
 // Load a plugin from a .so shared library.
 //
-// The library must export a global CrystalPlugin struct named "crystal_plugin".
+// The library must export a global MRPlugin struct named "mr_plugin".
 // After loading, the plugin's init() function is called. If init() returns
 // false, the plugin is unloaded and this function returns false.
 //
@@ -379,7 +379,7 @@ bool plugin_load(const char *path);
 // removes it from the active plugin list. If no plugin with the given name
 // is loaded, this is a no-op.
 //
-// name: the plugin's name (as reported by CrystalPlugin.name)
+// name: the plugin's name (as reported by MRPlugin.name)
 void plugin_unload(const char *name);
 
 
@@ -502,14 +502,14 @@ void plugin_effect_scale(GLuint texture, float scale);
 
 
 // ============================================================================
-//  Plugin hooks — called by Crystal's composite loop
+//  Plugin hooks — called by MoonRock's composite loop
 // ============================================================================
 //
 // These functions iterate over all loaded plugins and call the corresponding
-// hook function on each one. Crystal calls these at the appropriate point in
+// hook function on each one. MoonRock calls these at the appropriate point in
 // its per-frame rendering:
 //
-//   crystal_composite() {
+//   mr_composite() {
 //       plugin_run_pre_composite(w, h);    // Before drawing any windows
 //       for each window:
 //           plugin_run_window_effect(tex, x, y, w, h);  // Per-window effects
@@ -525,4 +525,4 @@ void plugin_run_post_composite(int screen_w, int screen_h);
 // Run every loaded plugin's window_effect hook on a single window.
 void plugin_run_window_effect(GLuint texture, int x, int y, int w, int h);
 
-#endif // CRYSTAL_PLUGIN_H
+#endif // MR_PLUGIN_H

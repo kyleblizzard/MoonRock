@@ -4,11 +4,11 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Display Management — VRR, Multi-Monitor, Direct Scanout, Gaming
+//  MoonRock Display Management — VRR, Multi-Monitor, Direct Scanout, Gaming
 // ============================================================================
 //
-// This module handles everything related to display outputs and how Crystal
-// interacts with them. While crystal.c owns the GL compositing pipeline, this
+// This module handles everything related to display outputs and how MoonRock
+// interacts with them. While moonrock.c owns the GL compositing pipeline, this
 // module owns the *displays* that pipeline renders to.
 //
 // What this module does:
@@ -38,9 +38,9 @@
 //
 //   5. GAMESCOPE INTEGRATION — gamescope is Valve's micro-compositor designed
 //      for gaming on Linux (used in SteamOS/Steam Deck). When a game launches,
-//      Crystal can hand off display control to gamescope, which provides its
+//      MoonRock can hand off display control to gamescope, which provides its
 //      own optimized compositing, scaling, and VRR management. When the game
-//      exits, control returns to Crystal.
+//      exits, control returns to MoonRock.
 //
 //   6. PIPEWIRE SCREENCAST — For screen sharing (Discord, OBS, etc.), this
 //      module can provide compositor frames to PipeWire. This is a stub for
@@ -48,8 +48,8 @@
 //
 // ============================================================================
 
-#ifndef CRYSTAL_DISPLAY_H
-#define CRYSTAL_DISPLAY_H
+#ifndef MR_DISPLAY_H
+#define MR_DISPLAY_H
 
 #include <stdbool.h>
 #include <X11/Xlib.h>
@@ -64,7 +64,7 @@ struct AuraWM;
 // ============================================================================
 //
 // Each physical monitor connected to the system is represented by a
-// CrystalOutput struct. XRandR (X Resize and Rotate) is the X11 extension
+// MROutput struct. XRandR (X Resize and Rotate) is the X11 extension
 // that provides monitor information — resolution, position, refresh rate,
 // and hardware capabilities like VRR.
 //
@@ -87,18 +87,18 @@ typedef struct {
                              // active monitor is connected through exactly one CRTC.
     unsigned long output_id; // XRandR output ID — represents the physical connector
                              // (HDMI port, DisplayPort, etc.)
-} CrystalOutput;
+} MROutput;
 
 
 // ============================================================================
 //  Gaming mode
 // ============================================================================
 //
-// Gaming mode controls how Crystal handles fullscreen games. There are three
+// Gaming mode controls how MoonRock handles fullscreen games. There are three
 // strategies, each with different trade-offs:
 //
 //   OFF     — Normal compositing. Every window (including the game) goes through
-//             Crystal's GL pipeline. This adds a small amount of latency (one
+//             MoonRock's GL pipeline. This adds a small amount of latency (one
 //             extra buffer copy) but keeps all compositor effects working.
 //
 //   BYPASS  — Direct scanout. The game's buffer is sent directly to the display
@@ -106,13 +106,13 @@ typedef struct {
 //             but overlays (notifications, Steam overlay) won't render on top of
 //             the game unless they use the game's own overlay mechanism.
 //
-//   GAMESCOPE — Crystal hands off display control to Valve's gamescope compositor,
+//   GAMESCOPE — MoonRock hands off display control to Valve's gamescope compositor,
 //              which is purpose-built for gaming. Gamescope handles its own VRR,
-//              scaling (FSR), and frame limiting. When the game exits, Crystal
+//              scaling (FSR), and frame limiting. When the game exits, MoonRock
 //              takes control back.
 
 typedef enum {
-    GAME_MODE_OFF,           // Normal compositing — all windows go through Crystal
+    GAME_MODE_OFF,           // Normal compositing — all windows go through MoonRock
     GAME_MODE_BYPASS,        // Direct scanout — game buffer goes straight to display
     GAME_MODE_GAMESCOPE,     // Handed off to gamescope for dedicated game compositing
 } GameMode;
@@ -173,10 +173,10 @@ void display_shutdown(void);
 // Parameters:
 //   count — Receives the number of outputs in the returned array.
 //
-// Returns a pointer to an internal array of CrystalOutput structs. This
+// Returns a pointer to an internal array of MROutput structs. This
 // pointer is valid until the next call to display_init() or
 // display_handle_hotplug(). Do NOT free the returned pointer.
-CrystalOutput *display_get_outputs(int *count);
+MROutput *display_get_outputs(int *count);
 
 // Get the primary display output.
 //
@@ -185,7 +185,7 @@ CrystalOutput *display_get_outputs(int *count);
 // marked as primary by XRandR, we pick the first one.
 //
 // Returns NULL if no outputs are available (e.g., all monitors unplugged).
-CrystalOutput *display_get_primary(void);
+MROutput *display_get_primary(void);
 
 
 // ============================================================================
@@ -208,14 +208,14 @@ CrystalOutput *display_get_primary(void);
 //
 // Checks that the output is VRR-capable and that the X server supports it.
 // Returns true if VRR was successfully enabled, false otherwise.
-bool display_enable_vrr(CrystalOutput *output);
+bool display_enable_vrr(MROutput *output);
 
 // Disable VRR on a specific output, returning to fixed refresh rate.
-void display_disable_vrr(CrystalOutput *output);
+void display_disable_vrr(MROutput *output);
 
 // Check if VRR is currently active (not just enabled, but actually varying
 // the refresh rate because content is being delivered at variable intervals).
-bool display_is_vrr_active(CrystalOutput *output);
+bool display_is_vrr_active(MROutput *output);
 
 
 // ============================================================================
@@ -272,7 +272,7 @@ void display_handle_hotplug(Display *dpy);
 //   w, h   — Receives the width and height in pixels.
 //
 // Returns 0 on success, -1 if the output pointer is NULL.
-int display_get_viewport_for_output(CrystalOutput *output,
+int display_get_viewport_for_output(MROutput *output,
                                     int *x, int *y, int *w, int *h);
 
 
@@ -284,9 +284,9 @@ int display_get_viewport_for_output(CrystalOutput *output,
 //
 // Switching modes has side effects:
 //   - OFF -> BYPASS: enables direct scanout on the focused fullscreen window.
-//   - OFF -> GAMESCOPE: launches gamescope and suspends Crystal compositing.
+//   - OFF -> GAMESCOPE: launches gamescope and suspends MoonRock compositing.
 //   - BYPASS -> OFF: disables direct scanout, resumes normal compositing.
-//   - GAMESCOPE -> OFF: waits for gamescope to exit, resumes Crystal.
+//   - GAMESCOPE -> OFF: waits for gamescope to exit, resumes MoonRock.
 void display_set_game_mode(GameMode mode);
 
 // Get the current gaming mode.
@@ -362,14 +362,14 @@ bool display_check_direct_scanout(struct AuraWM *wm);
 // Deck). It provides its own VRR management, FSR upscaling, frame limiting,
 // and overlay support — all optimized for a single game.
 //
-// When we "hand off" to gamescope, Crystal stops compositing and gamescope
-// takes over the display. When the game exits, gamescope exits, and Crystal
+// When we "hand off" to gamescope, MoonRock stops compositing and gamescope
+// takes over the display. When the game exits, gamescope exits, and MoonRock
 // resumes.
 
 // Launch gamescope with a specific game command.
 //
 // Builds a gamescope command line using the primary display's resolution and
-// refresh rate, then forks a child process to run it. Crystal switches to
+// refresh rate, then forks a child process to run it. MoonRock switches to
 // GAME_MODE_GAMESCOPE.
 //
 // Parameters:
@@ -380,10 +380,10 @@ bool display_check_direct_scanout(struct AuraWM *wm);
 // or if gamescope is not installed.
 bool display_launch_gamescope(const char *game_command);
 
-// Return from gamescope to normal Crystal compositing.
+// Return from gamescope to normal MoonRock compositing.
 //
 // Waits for the gamescope child process to exit (non-blocking check), then
-// switches back to GAME_MODE_OFF and resumes Crystal compositing.
+// switches back to GAME_MODE_OFF and resumes MoonRock compositing.
 void display_return_from_gamescope(void);
 
 
@@ -426,4 +426,4 @@ void display_shutdown_screencast(void);
 FrameMetrics display_get_metrics(void);
 
 
-#endif // CRYSTAL_DISPLAY_H
+#endif // MR_DISPLAY_H

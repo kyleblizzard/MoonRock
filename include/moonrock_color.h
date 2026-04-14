@@ -4,10 +4,10 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Color — Display scaling, HDR, and color management for Crystal
+//  MoonRock Color — Display scaling, HDR, and color management for MoonRock
 // ============================================================================
 //
-// The Crystal compositor needs to render correctly across wildly different
+// The MoonRock compositor needs to render correctly across wildly different
 // displays. The Lenovo Legion Go has a 1920x1200 8-inch screen at 283 PPI,
 // while a typical external 1080p monitor at 24" sits around 92 PPI, and a
 // 27" 4K display lands near 163 PPI. Without proper scaling, UI elements
@@ -54,8 +54,8 @@
 //
 // ============================================================================
 
-#ifndef CRYSTAL_COLOR_H
-#define CRYSTAL_COLOR_H
+#ifndef MR_COLOR_H
+#define MR_COLOR_H
 
 #include <stdbool.h>
 
@@ -123,7 +123,7 @@ bool color_init(void *dpy, int screen);
 // Shut down color management and free all resources.
 //
 // Clears the display list and releases any loaded ICC profile data.
-// Call this during Crystal's shutdown sequence.
+// Call this during MoonRock's shutdown sequence.
 void color_shutdown(void);
 
 
@@ -222,7 +222,7 @@ void color_apply_tone_mapping(unsigned int shader_program, float exposure);
 //
 // We track gamma as a float and pass it to the tone mapping shader. We also
 // (optionally) set the X11 gamma ramp via XRandR so the correction applies
-// to the whole display output, not just Crystal's rendered content.
+// to the whole display output, not just MoonRock's rendered content.
 
 // Set the gamma correction value.
 //
@@ -258,4 +258,4 @@ float color_get_gamma(void);
 bool color_load_icc_profile(const char *path);
 
 
-#endif // CRYSTAL_COLOR_H
+#endif // MR_COLOR_H

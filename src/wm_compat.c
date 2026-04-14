@@ -7,12 +7,12 @@
 // wm_compat.c — Window Manager Compatibility Implementations
 // ============================================================================
 //
-// These functions replicate the minimal WM helper functions that Crystal's
-// internal code calls. When Crystal is used inside AuraOS, the real wm.c and
-// ewmh.c provide these. When Crystal is built standalone (libcrystal.so),
+// These functions replicate the minimal WM helper functions that MoonRock's
+// internal code calls. When MoonRock is used inside AuraOS, the real wm.c and
+// ewmh.c provide these. When MoonRock is built standalone (libmoonrock.so),
 // these implementations are used instead.
 //
-// The functions are intentionally simple — they do exactly what Crystal needs
+// The functions are intentionally simple — they do exactly what MoonRock needs
 // and nothing more.
 // ============================================================================
 
@@ -21,7 +21,7 @@
 
 // When building inside AuraOS, the real wm.c and ewmh.c provide all these
 // functions. This file only compiles its implementations in standalone mode.
-#if !defined(CRYSTAL_EMBEDDED_IN_WM) && !defined(AURA_WM_H)
+#if !defined(MR_EMBEDDED_IN_WM) && !defined(AURA_WM_H)
 
 #include <string.h>
 #include <stdio.h>
@@ -65,7 +65,7 @@ Client *wm_find_client_by_frame(AuraWM *wm, Window frame)
 
 // Get the _NET_WM_WINDOW_TYPE property for a window.
 // This tells us whether the window is a normal app, a dock/panel, the desktop
-// background, etc. Crystal uses this for z-order pass assignment.
+// background, etc. MoonRock uses this for z-order pass assignment.
 Atom ewmh_get_window_type(AuraWM *wm, Window w)
 {
     if (!wm || !w) return wm ? wm->atom_net_wm_type_normal : None;
@@ -123,7 +123,7 @@ void wm_focus_client(AuraWM *wm, Client *c)
 // Atom initialization
 // ============================================================================
 
-// Intern all the EWMH atoms that Crystal's internal code uses.
+// Intern all the EWMH atoms that MoonRock's internal code uses.
 // XInternAtom asks the X server for the numeric ID corresponding to an atom
 // name string. We do this once at init time and cache the results.
 void wm_compat_init_atoms(AuraWM *wm)
@@ -149,4 +149,4 @@ void wm_compat_init_atoms(AuraWM *wm)
     wm->atom_wm_delete              = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
 }
 
-#endif // !CRYSTAL_EMBEDDED_IN_WM && !AURA_WM_H
+#endif // !MR_EMBEDDED_IN_WM && !AURA_WM_H

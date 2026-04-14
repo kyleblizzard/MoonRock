@@ -4,7 +4,7 @@
 // via any medium, is strictly prohibited.
 //
 // ============================================================================
-//  Crystal Display Management — Implementation
+//  MoonRock Display Management — Implementation
 // ============================================================================
 //
 // This file implements display output enumeration, VRR control, adaptive frame
@@ -22,7 +22,7 @@
 
 #define _GNU_SOURCE  // Needed for some POSIX extensions (e.g., setsid)
 
-#include "crystal_display.h"
+#include "moonrock_display.h"
 #include "wm_compat.h"
 
 #include <stdio.h>
@@ -38,7 +38,7 @@
 #include <X11/extensions/Xrandr.h>
 
 // XComposite — the X11 extension that controls off-screen redirection.
-// Normally, Crystal redirects all windows to off-screen pixmaps so we can
+// Normally, MoonRock redirects all windows to off-screen pixmaps so we can
 // composite them via OpenGL. For direct scanout, we "unredirect" a single
 // fullscreen window so the X server paints it straight to the display,
 // bypassing the compositor entirely. This is the same technique picom uses
@@ -67,7 +67,7 @@ static Window display_root = None;
 
 // Array of discovered display outputs. Allocated on the heap during
 // display_init() and reallocated on hotplug. Freed in display_shutdown().
-static CrystalOutput *outputs = NULL;
+static MROutput *outputs = NULL;
 
 // How many outputs are currently in the array.
 static int output_count = 0;
@@ -158,7 +158,7 @@ bool display_init(Display *dpy, int screen)
     // On subsequent calls (e.g., from hotplug), we reuse the existing array
     // and just overwrite the entries.
     if (!outputs) {
-        outputs = calloc(MAX_OUTPUTS, sizeof(CrystalOutput));
+        outputs = calloc(MAX_OUTPUTS, sizeof(MROutput));
         if (!outputs) {
             fprintf(stderr, "[display] ERROR: Failed to allocate output array\n");
             return false;
@@ -211,9 +211,9 @@ bool display_init(Display *dpy, int screen)
             continue;
         }
 
-        // Build the CrystalOutput entry for this monitor.
-        CrystalOutput *out = &outputs[output_count];
-        memset(out, 0, sizeof(CrystalOutput));
+        // Build the MROutput entry for this monitor.
+        MROutput *out = &outputs[output_count];
+        memset(out, 0, sizeof(MROutput));
 
         // Copy the output name (e.g., "HDMI-1"). Truncate if it's too long
         // for our fixed-size buffer — this should never happen in practice
@@ -328,7 +328,7 @@ bool display_init(Display *dpy, int screen)
     }
 
     // Initialize the frame metrics with sensible defaults.
-    CrystalOutput *primary = display_get_primary();
+    MROutput *primary = display_get_primary();
     metrics.target_fps = primary ? primary->refresh_hz : 60;
     metrics.fps = 0;
     metrics.last_frame_time_ms = 0.0;
@@ -360,13 +360,13 @@ bool display_init(Display *dpy, int screen)
 //  Output queries
 // ============================================================================
 
-CrystalOutput *display_get_outputs(int *count)
+MROutput *display_get_outputs(int *count)
 {
     if (count) *count = output_count;
     return outputs;
 }
 
-CrystalOutput *display_get_primary(void)
+MROutput *display_get_primary(void)
 {
     // Scan the output list for the one marked as primary.
     for (int i = 0; i < output_count; i++) {
@@ -386,7 +386,7 @@ CrystalOutput *display_get_primary(void)
 //  VRR (Variable Refresh Rate) control
 // ============================================================================
 
-bool display_enable_vrr(CrystalOutput *output)
+bool display_enable_vrr(MROutput *output)
 {
     if (!output) return false;
 
@@ -439,7 +439,7 @@ bool display_enable_vrr(CrystalOutput *output)
     return true;
 }
 
-void display_disable_vrr(CrystalOutput *output)
+void display_disable_vrr(MROutput *output)
 {
     if (!output) return;
 
@@ -450,7 +450,7 @@ void display_disable_vrr(CrystalOutput *output)
     }
 }
 
-bool display_is_vrr_active(CrystalOutput *output)
+bool display_is_vrr_active(MROutput *output)
 {
     if (!output) return false;
 
@@ -524,7 +524,7 @@ void display_end_frame(void)
 int display_get_target_frame_time(void)
 {
     // Check if VRR is active on the primary display.
-    CrystalOutput *primary = display_get_primary();
+    MROutput *primary = display_get_primary();
 
     if (primary && display_is_vrr_active(primary)) {
         // VRR is active — return 0 to signal "render as fast as possible."
@@ -569,7 +569,7 @@ void display_handle_hotplug(Display *dpy)
     }
 }
 
-int display_get_viewport_for_output(CrystalOutput *output,
+int display_get_viewport_for_output(MROutput *output,
                                     int *x, int *y, int *w, int *h)
 {
     if (!output) return -1;
@@ -646,7 +646,7 @@ bool display_can_direct_scanout(Window win, Display *dpy)
     if (wa.map_state != IsViewable) return false;
 
     // Find the primary display — direct scanout targets the primary monitor.
-    CrystalOutput *primary = display_get_primary();
+    MROutput *primary = display_get_primary();
     if (!primary) return false;
 
     // ── Condition 1: The window must cover the entire primary display. ──
@@ -727,9 +727,9 @@ void display_enable_direct_scanout(Window win, Display *dpy)
 
     // ── Unredirect the window via XComposite ──
     //
-    // Normally, Crystal calls XCompositeRedirectSubwindows() during init,
+    // Normally, MoonRock calls XCompositeRedirectSubwindows() during init,
     // which tells the X server to draw every window into an off-screen pixmap
-    // instead of directly to the screen. Crystal then reads those pixmaps as
+    // instead of directly to the screen. MoonRock then reads those pixmaps as
     // GL textures and composites them together.
     //
     // XCompositeUnredirectWindow() reverses this for a single window. The X
@@ -737,11 +737,11 @@ void display_enable_direct_scanout(Window win, Display *dpy)
     // completely bypassing our compositor. The result:
     //   - Zero extra buffer copies (the game's buffer goes straight to the
     //     display via the X server's built-in DRI path).
-    //   - One less frame of latency (no waiting for Crystal to composite).
-    //   - Reduced GPU load (Crystal doesn't need to texture-map this window).
+    //   - One less frame of latency (no waiting for MoonRock to composite).
+    //   - Reduced GPU load (MoonRock doesn't need to texture-map this window).
     //
     // CompositeRedirectManual matches the redirect mode we used when setting
-    // up redirection in crystal.c — the unredirect mode must match the
+    // up redirection in moonrock.c — the unredirect mode must match the
     // original redirect mode.
     XCompositeUnredirectWindow(dpy, win, CompositeRedirectManual);
 
@@ -779,11 +779,11 @@ void display_disable_direct_scanout(void)
     //
     // This reverses the XCompositeUnredirectWindow() call from
     // display_enable_direct_scanout(). The X server will once again draw this
-    // window into an off-screen pixmap, and Crystal will composite it via GL
+    // window into an off-screen pixmap, and MoonRock will composite it via GL
     // on the next frame.
     //
     // CompositeRedirectManual must match the mode used in both the original
-    // redirect (in crystal.c) and the unredirect (in enable_direct_scanout).
+    // redirect (in moonrock.c) and the unredirect (in enable_direct_scanout).
     //
     // Check that the window still exists before redirecting — it may have
     // been destroyed between the scanout enable and this disable call.
@@ -792,7 +792,7 @@ void display_disable_direct_scanout(void)
         XCompositeRedirectWindow(display_dpy, direct_scanout_win,
                                  CompositeRedirectManual);
     } else {
-        fprintf(stderr, "[crystal_display] Scanout window 0x%lx already destroyed, "
+        fprintf(stderr, "[moonrock_display] Scanout window 0x%lx already destroyed, "
                 "skipping redirect\n", (unsigned long)direct_scanout_win);
     }
 
@@ -833,7 +833,7 @@ bool display_check_direct_scanout(AuraWM *wm)
         // It might have left fullscreen, been covered by another window,
         // or been destroyed entirely.
         if (!display_can_direct_scanout(direct_scanout_win, wm->dpy)) {
-            // The window no longer qualifies — disable scanout so Crystal
+            // The window no longer qualifies — disable scanout so MoonRock
             // takes over compositing again on the next frame.
             fprintf(stderr, "[display] Scanout window 0x%lx no longer eligible "
                     "— disabling direct scanout\n",
@@ -899,7 +899,7 @@ bool display_launch_gamescope(const char *game_command)
         gamescope_pid = 0;
     }
 
-    CrystalOutput *primary = display_get_primary();
+    MROutput *primary = display_get_primary();
     if (!primary) {
         fprintf(stderr, "[display] ERROR: No primary output for gamescope\n");
         return false;
@@ -1011,7 +1011,7 @@ void display_return_from_gamescope(void)
     // calls return_from_gamescope when transitioning out of GAMESCOPE mode).
     if (current_game_mode == GAME_MODE_GAMESCOPE) {
         current_game_mode = GAME_MODE_OFF;
-        fprintf(stderr, "[display] Resumed Crystal compositing\n");
+        fprintf(stderr, "[display] Resumed MoonRock compositing\n");
     }
 }
 
