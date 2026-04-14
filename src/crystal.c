@@ -33,6 +33,8 @@
 #define _GNU_SOURCE  // Needed for M_PI from <math.h>
 #include "crystal.h"
 #include "crystal_shaders.h"
+#include "crystal_display.h"
+#include "crystal_plugin.h"
 #include "ewmh.h"
 
 // Forward declaration removed — compositor.c is no longer linked.
@@ -1595,6 +1597,15 @@ void crystal_composite(AuraWM *wm)
 {
     if (!crystal.active || !wm) return;
 
+    // ── Step 0: Check for direct scanout bypass ──
+    // If a single fullscreen opaque window covers the entire display (e.g.,
+    // a game), we can skip compositing entirely and let the X server present
+    // the window's buffer directly. This eliminates compositor latency and
+    // saves GPU power — critical for gaming on the Legion Go S.
+    if (display_check_direct_scanout(wm)) {
+        return;  // Game is presenting directly, nothing for us to do
+    }
+
     // Make our GL context current. This is technically redundant if we're
     // the only GL user, but it's good practice — other code might have
     // changed the current context.
@@ -1689,6 +1700,20 @@ void crystal_composite(AuraWM *wm)
                 Client *c = wm_find_client_by_frame(wm, wt->xwin);
                 bool focused = c ? c->focused : false;
                 draw_window_shadow(wt, focused);
+            }
+
+            // ── Apply blur-behind for translucent panels ──
+            // Dock and panel windows (pass 2) can have frosted glass blur.
+            // Before drawing the panel, we capture the region behind it,
+            // blur it, and draw the blurred result. The panel's own texture
+            // is then composited on top, creating the frosted glass look.
+            if (window_pass == 2 && crystal.shaders.blur_h && crystal.shaders.blur_v) {
+                ThemeDefinition *theme = plugin_get_theme();
+                float blur_radius = theme ? theme->blur_behind_radius : 0.0f;
+                if (blur_radius > 0.0f) {
+                    plugin_effect_blur(0, wt->x, wt->y, wt->w, wt->h,
+                                       blur_radius);
+                }
             }
 
             // ── Draw the window contents ──
