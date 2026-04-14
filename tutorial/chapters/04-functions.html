@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chapter 4: Functions — Learning C by Building a Compositor</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<h1>Chapter 4: Functions — Teaching Your Program New Tricks</h1>
+
+<h2>One Thing at a Time</h2>
+
+<p>
+    Imagine you're giving someone directions to your house. You <em>could</em> write it as one
+    massive paragraph: "Go north on Main, turn left at the gas station, pass the school, turn
+    right at the stop sign, go up the hill..." But it's way easier to break it into steps:
+    "Get on Main Street. Head to the gas station. Turn left. Look for the school..."
+</p>
+
+<p>
+    Functions are exactly that: named steps. You take a chunk of code that does one specific
+    thing, give it a name, and then you can call it whenever you need that thing done. Instead
+    of copying and pasting the same ten lines everywhere, you write them once and call the
+    function by name. It keeps your code organized, readable, and way less error-prone.
+</p>
+
+<h2>Anatomy of a Function</h2>
+
+<p>
+    A function has four parts: a return type, a name, parameters, and a body.
+</p>
+
+<pre><code><span class="kw">int</span> <span class="fn">add</span>(<span class="kw">int</span> a, <span class="kw">int</span> b)
+{
+    <span class="kw">int</span> result = a + b;
+    <span class="kw">return</span> result;
+}</code></pre>
+
+<p>
+    Let's break that down:
+</p>
+
+<ul>
+    <li><code>int</code> — the <em>return type</em>. This function gives back a whole number when it's done.</li>
+    <li><code>add</code> — the <em>name</em>. What we call this function. Should describe what it does.</li>
+    <li><code>(int a, int b)</code> — the <em>parameters</em>. The inputs. This function needs two integers to work with.</li>
+    <li><code>{ ... }</code> — the <em>body</em>. The actual instructions. Add the two numbers, return the result.</li>
+</ul>
+
+<p>
+    To use (or "call") this function:
+</p>
+
+<pre><code><span class="kw">int</span> total = <span class="fn">add</span>(<span class="num">3</span>, <span class="num">7</span>);
+<span class="fn">printf</span>(<span class="str">"Total: %d\n"</span>, total);   <span class="cmt">// Total: 10</span></code></pre>
+
+<p>
+    When you write <code>add(3, 7)</code>, C jumps into the <code>add</code> function, sets
+    <code>a</code> to 3 and <code>b</code> to 7, runs the body, and comes back with the result.
+    It's like calling someone on the phone: "Hey, what's 3 plus 7?" "10." "Thanks." Done.
+</p>
+
+<h2>Void Functions: No Return Value</h2>
+
+<p>
+    Not every function needs to give something back. Sometimes you just want it to <em>do</em>
+    something — print a message, update a variable, clean up resources. For those, you use
+    <code>void</code> as the return type:
+</p>
+
+<pre><code><span class="kw">void</span> <span class="fn">greet</span>(<span class="kw">char</span> *name)
+{
+    <span class="fn">printf</span>(<span class="str">"Hello, %s!\n"</span>, name);
+}
+
+<span class="cmt">// Calling it:</span>
+<span class="fn">greet</span>(<span class="str">"Kyle"</span>);   <span class="cmt">// prints: Hello, Kyle!</span></code></pre>
+
+<p>
+    <code>void</code> means "nothing." The function doesn't return a value — it just does its
+    job and comes back. You don't write <code>return</code> in a void function (though you can
+    write <code>return;</code> by itself to exit early).
+</p>
+
+<h2>Crystal's Functions: The Real Deal</h2>
+
+<p>
+    Now let's look at a real function signature from Crystal Compositor. Here's the initialization
+    function:
+</p>
+
+<pre><code><span class="kw">bool</span> <span class="fn">crystal_init</span>(<span class="type">AuraWM</span> *wm);</code></pre>
+
+<p>
+    This is a <em>function declaration</em> (also called a "prototype"). It tells the compiler:
+    "there exists a function called <code>crystal_init</code> that takes one parameter and returns
+    a bool." Let's decode each piece:
+</p>
+
+<ul>
+    <li><code>bool</code> — the return type. This function returns <code>true</code> or <code>false</code>. True means "initialization succeeded." False means "something went wrong, we can't composite."</li>
+    <li><code>crystal_init</code> — the name. Clear and descriptive: it initializes the Crystal compositor.</li>
+    <li><code>AuraWM *wm</code> — the parameter. It takes a <em>pointer</em> to an <code>AuraWM</code> struct. Don't worry about pointers or structs yet — we'll cover both soon. For now, just think of it as "it needs access to the window manager's state to do its job."</li>
+</ul>
+
+<p>
+    And here's how it's called in <code>main()</code>:
+</p>
+
+<pre><code><span class="kw">if</span> (!<span class="fn">crystal_init</span>(&amp;wm)) {
+    <span class="fn">fprintf</span>(stderr, <span class="str">"[aura-wm] Crystal unavailable — no shadows\n"</span>);
+}</code></pre>
+
+<p>
+    That <code>!</code> is the "not" operator. So this reads as: "if crystal_init did NOT
+    succeed, print an error message." The program doesn't crash — it just runs without
+    shadows. That's graceful degradation, and it's good design. Your program should handle
+    failure, not ignore it.
+</p>
+
+<p>
+    Now look at the shutdown function:
+</p>
+
+<pre><code><span class="kw">void</span> <span class="fn">crystal_shutdown</span>(<span class="type">AuraWM</span> *wm);</code></pre>
+
+<p>
+    <code>void</code> return type — it doesn't return a value. It just cleans up: destroys textures,
+    frees memory, shuts down OpenGL. When you're tearing down, there's nothing meaningful to
+    return. Either it cleaned up or the program is exiting anyway.
+</p>
+
+<h2>Why Functions Matter</h2>
+
+<p>
+    Look at Crystal's main.c again. The entire program is basically:
+</p>
+
+<pre><code><span class="fn">wm_init</span>(&amp;wm);        <span class="cmt">// Set up the window manager</span>
+<span class="fn">crystal_init</span>(&amp;wm);   <span class="cmt">// Set up the compositor</span>
+<span class="fn">struts_init</span>(&amp;wm);    <span class="cmt">// Set up screen edge reservation</span>
+<span class="fn">decor_init</span>(&amp;wm);     <span class="cmt">// Load window decoration assets</span>
+<span class="fn">input_setup_grabs</span>(&amp;wm);  <span class="cmt">// Set up keyboard shortcuts</span>
+<span class="fn">events_run</span>(&amp;wm);     <span class="cmt">// Run forever, processing events</span>
+<span class="fn">crystal_shutdown</span>(&amp;wm);   <span class="cmt">// Tear down compositor</span>
+<span class="fn">wm_shutdown</span>(&amp;wm);    <span class="cmt">// Tear down window manager</span></code></pre>
+
+<p>
+    Each of those function calls hides hundreds of lines of code behind a clear, descriptive
+    name. You can read <code>main()</code> like a story: initialize, run, shut down. You don't
+    need to see the details of how each step works to understand the big picture. That's the
+    magic of functions — they let you think at different levels of detail.
+</p>
+
+<p>
+    <code>crystal_init</code> alone is over 200 lines — it checks for OpenGL extensions, creates
+    rendering contexts, sets up damage tracking, and computes a Gaussian blur kernel. But from
+    <code>main</code>'s perspective? It's one line. One function call. "Initialize Crystal." Done.
+</p>
+
+<h2>Writing Your Own Functions</h2>
+
+<p>
+    Let's write a complete program with functions. Here's a temperature converter:
+</p>
+
+<pre><code><span class="pp">#include</span> <span class="str">&lt;stdio.h&gt;</span>
+
+<span class="cmt">// Convert Fahrenheit to Celsius</span>
+<span class="kw">float</span> <span class="fn">to_celsius</span>(<span class="kw">float</span> fahrenheit)
+{
+    <span class="kw">return</span> (fahrenheit - <span class="num">32.0</span>) * <span class="num">5.0</span> / <span class="num">9.0</span>;
+}
+
+<span class="cmt">// Convert Celsius to Fahrenheit</span>
+<span class="kw">float</span> <span class="fn">to_fahrenheit</span>(<span class="kw">float</span> celsius)
+{
+    <span class="kw">return</span> celsius * <span class="num">9.0</span> / <span class="num">5.0</span> + <span class="num">32.0</span>;
+}
+
+<span class="cmt">// Print a temperature in both units</span>
+<span class="kw">void</span> <span class="fn">print_temp</span>(<span class="kw">float</span> f)
+{
+    <span class="fn">printf</span>(<span class="str">"%.1f°F = %.1f°C\n"</span>, f, <span class="fn">to_celsius</span>(f));
+}
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">void</span>)
+{
+    <span class="fn">print_temp</span>(<span class="num">32.0</span>);    <span class="cmt">// freezing point</span>
+    <span class="fn">print_temp</span>(<span class="num">72.0</span>);    <span class="cmt">// room temperature</span>
+    <span class="fn">print_temp</span>(<span class="num">212.0</span>);   <span class="cmt">// boiling point</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+<p>
+    Notice how <code>print_temp</code> calls <code>to_celsius</code> — functions can call other
+    functions. In fact, that's how all programs work. Functions calling functions calling functions,
+    all the way down to the ones that actually talk to the hardware. It's functions all the way down.
+</p>
+
+<div class="tip">
+    <strong>Naming matters.</strong> Notice how Crystal names its functions:
+    <code>crystal_init</code>, <code>crystal_shutdown</code>, <code>crystal_composite</code>,
+    <code>crystal_window_mapped</code>. They all start with <code>crystal_</code> so you know
+    which module they belong to, followed by a verb that describes the action. This naming
+    convention is how C programmers organize code without classes or namespaces. Keep your
+    function names clear and consistent.
+</div>
+
+<div class="try-it">
+    <h3>Try It Yourself</h3>
+    <ol>
+        <li>Write a function <code>int square(int n)</code> that returns <code>n * n</code>.</li>
+        <li>Write a function <code>int max(int a, int b)</code> that returns the larger of two numbers. (Hint: you'll need an <code>if</code> statement — sneak peek at Chapter 5!)</li>
+        <li>Write a void function <code>print_box(char *text)</code> that prints a text string inside a box made of dashes and pipes.</li>
+        <li>Call all three from <code>main</code> and verify they work.</li>
+    </ol>
+</div>
+
+<div class="resources">
+    <h3>Further Reading</h3>
+    <ul>
+        <li><strong>Books:</strong> K&amp;R Chapter 1.7 (Functions) and Chapter 4 (Functions and Program Structure).</li>
+        <li><strong>Books:</strong> <em>Absolute Beginner's Guide</em>, Chapters 30-32.</li>
+        <li><strong>Online:</strong> <a href="https://beej.us/guide/bgc/html/split/functions.html">Beej's Guide: Functions</a></li>
+    </ul>
+</div>
+
+<div class="chapter-nav">
+    <a href="03-variables.html">&larr; Chapter 3: Variables</a>
+    <a href="../index.html">Home</a>
+    <a href="05-control-flow.html">Chapter 5: Control Flow &rarr;</a>
+</div>
+
+</body>
+</html>

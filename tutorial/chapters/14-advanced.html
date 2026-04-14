@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chapter 14: Advanced Topics — Learning C by Building a Compositor</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<h1>Chapter 14: Advanced Topics — The Deep End</h1>
+
+<h2>You're Ready for This</h2>
+
+<p>
+    If you've made it through pointers, memory management, and debugging, you've already
+    survived the hardest parts of C. The topics in this chapter are more advanced, but they
+    build on everything you already know. Think of them as power tools — not required for
+    every project, but incredibly useful when you need them.
+</p>
+
+<h2>Function Pointers: Functions as Data</h2>
+
+<p>
+    Here's a mind-bending idea: in C, functions have addresses in memory, just like variables.
+    That means you can store a pointer to a function and call it later. You can put function
+    pointers in arrays, pass them to other functions, and even store them in structs.
+</p>
+
+<pre><code><span class="cmt">// Declare a function pointer type</span>
+<span class="kw">typedef void</span> (*<span class="type">EventHandler</span>)(<span class="type">AuraWM</span> *, <span class="type">XEvent</span> *);
+
+<span class="cmt">// Create an array of function pointers — one per event type</span>
+<span class="kw">static</span> <span class="type">EventHandler</span> handlers[LASTEvent];
+
+<span class="cmt">// Fill in the table during initialization</span>
+handlers[MapRequest]      = on_map_request;
+handlers[UnmapNotify]     = on_unmap_notify;
+handlers[ConfigureRequest] = on_configure_request;
+handlers[ButtonPress]     = on_button_press;
+handlers[KeyPress]        = on_key_press;</code></pre>
+
+<p>
+    This is the actual event dispatch table from Crystal's <code>events.c</code>. Instead of a
+    giant <code>switch</code> statement with a case for every event type, there's an array of
+    function pointers. When an event arrives, the code looks up the handler:
+</p>
+
+<pre><code><span class="kw">if</span> (ev.type < LASTEvent &amp;&amp; handlers[ev.type]) {
+    handlers[ev.type](wm, &amp;ev);   <span class="cmt">// call the function pointer!</span>
+}</code></pre>
+
+<p>
+    <code>handlers[ev.type]</code> is a function pointer. Adding <code>(wm, &amp;ev)</code>
+    after it calls the function it points to. If the event type is <code>MapRequest</code>,
+    this calls <code>on_map_request(wm, &amp;ev)</code>. If it's <code>ButtonPress</code>,
+    this calls <code>on_button_press(wm, &amp;ev)</code>. One line of code handles all event
+    types. That's the power of function pointers — data-driven dispatch instead of hard-coded
+    branching.
+</p>
+
+<p>
+    This pattern is used everywhere in systems programming: plugin architectures, callback
+    systems, signal handlers, virtual method tables. It's how C achieves polymorphism without
+    classes or inheritance.
+</p>
+
+<h2>Bit Manipulation: Talking to Hardware</h2>
+
+<p>
+    Computers think in bits. Sometimes you need to think in bits too — especially when working
+    with hardware, protocols, or flags. C gives you operators that work at the bit level:
+</p>
+
+<pre><code>&amp;    <span class="cmt">// AND: both bits must be 1</span>
+|    <span class="cmt">// OR:  at least one bit must be 1</span>
+^    <span class="cmt">// XOR: exactly one bit must be 1</span>
+~    <span class="cmt">// NOT: flip all bits</span>
+&lt;&lt;   <span class="cmt">// left shift: multiply by 2</span>
+&gt;&gt;   <span class="cmt">// right shift: divide by 2</span></code></pre>
+
+<p>
+    The most common use is flags — packing multiple boolean values into a single integer.
+    X11 does this constantly:
+</p>
+
+<pre><code><span class="cmt">// X11 event mask — each bit enables a different type of event</span>
+<span class="kw">long</span> event_mask = SubstructureRedirectMask   <span class="cmt">// bit 20</span>
+               | SubstructureNotifyMask      <span class="cmt">// bit 19</span>
+               | StructureNotifyMask         <span class="cmt">// bit 17</span>
+               | PropertyChangeMask;         <span class="cmt">// bit 22</span></code></pre>
+
+<p>
+    Each constant is a power of 2 (a single bit set). Using <code>|</code> (OR) combines them
+    into one value with multiple bits set. The X server reads each bit to know which events you
+    want. This is extremely memory-efficient — 32 boolean flags in a single 32-bit integer.
+</p>
+
+<p>
+    To check if a specific flag is set:
+</p>
+
+<pre><code><span class="kw">if</span> (e-&gt;state &amp; MOD_KEY) {
+    <span class="cmt">// The modifier key (Super/Command) is held down</span>
+}</code></pre>
+
+<p>
+    <code>&amp;</code> (AND) tests whether the MOD_KEY bit is set in the event's state field.
+    If the result is non-zero, the modifier is active.
+</p>
+
+<h2>Preprocessor Macros: Code That Writes Code</h2>
+
+<p>
+    We've seen <code>#define</code> for constants. But the preprocessor can do more — it can
+    define macros that take arguments:
+</p>
+
+<pre><code><span class="pp">#define</span> <span class="fn">MAX</span>(a, b) ((a) > (b) ? (a) : (b))
+<span class="pp">#define</span> <span class="fn">MIN</span>(a, b) ((a) < (b) ? (a) : (b))
+<span class="pp">#define</span> <span class="fn">CLAMP</span>(x, lo, hi) (<span class="fn">MIN</span>(<span class="fn">MAX</span>(x, lo), hi))</code></pre>
+
+<p>
+    These are textual substitutions. <code>MAX(a, b)</code> gets replaced with the ternary
+    expression before compilation. The parentheses around every argument are critical — without
+    them, operator precedence can produce wrong results. This is macro hygiene, and every C
+    programmer learns it the hard way at least once.
+</p>
+
+<p>
+    Macros are also used for conditional compilation:
+</p>
+
+<pre><code><span class="pp">#ifdef</span> DEBUG
+    <span class="fn">fprintf</span>(stderr, <span class="str">"[debug] x = %d\n"</span>, x);
+<span class="pp">#endif</span></code></pre>
+
+<p>
+    If <code>DEBUG</code> is defined (via <code>#define DEBUG</code> or <code>-DDEBUG</code> on
+    the command line), the debug print compiles in. Otherwise, it's stripped out entirely — zero
+    runtime cost. This is how you add debug logging that doesn't slow down production builds.
+</p>
+
+<h2>The static Keyword: Three Different Meanings</h2>
+
+<p>
+    The <code>static</code> keyword in C does three different things depending on context, which
+    is frankly confusing. But each usage is important:
+</p>
+
+<ul>
+    <li>
+        <strong>Static local variable:</strong> Retains its value between function calls.
+<pre><code><span class="kw">void</span> <span class="fn">counter</span>(<span class="kw">void</span>) {
+    <span class="kw">static int</span> count = <span class="num">0</span>;  <span class="cmt">// initialized once, persists forever</span>
+    count++;
+    <span class="fn">printf</span>(<span class="str">"Called %d times\n"</span>, count);
+}</code></pre>
+    </li>
+    <li>
+        <strong>Static function:</strong> Only visible within the current file. This is C's
+        version of "private."
+<pre><code><span class="kw">static void</span> <span class="fn">generate_shadow_texture</span>(...) { ... }
+<span class="cmt">// Only crystal.c can call this — it's invisible to other files</span></code></pre>
+    </li>
+    <li>
+        <strong>Static global variable:</strong> Same as static function — file-scope only.
+<pre><code><span class="kw">static struct</span> { ... } crystal;
+<span class="cmt">// Only crystal.c can access this struct</span></code></pre>
+    </li>
+</ul>
+
+<p>
+    Crystal makes heavy use of <code>static</code> for encapsulation. All the internal state
+    and helper functions are static, keeping them hidden from the rest of the window manager.
+    Only the functions declared in <code>crystal.h</code> are visible externally.
+</p>
+
+<h2>The volatile Keyword</h2>
+
+<p>
+    One more keyword worth knowing: <code>volatile</code> tells the compiler "don't optimize
+    reads/writes to this variable — its value can change at any time from outside the program."
+    This is used when hardware registers, signal handlers, or other threads can modify a
+    variable behind the compiler's back. You won't need it often, but when you do, nothing
+    else will fix the bug.
+</p>
+
+<div class="try-it">
+    <h3>Try It Yourself</h3>
+    <ol>
+        <li>
+            Create an array of function pointers: three functions that each print a different
+            message. Store them in an array and call them in a loop.
+        </li>
+        <li>
+            Write a <code>#define SQUARE(x) ((x) * (x))</code> macro. Test it with
+            <code>SQUARE(5)</code> and <code>SQUARE(2 + 3)</code>. Then remove the parentheses
+            and see what goes wrong with <code>SQUARE(2 + 3)</code>.
+        </li>
+        <li>
+            Use bit flags: define constants for <code>READ = 1</code>, <code>WRITE = 2</code>,
+            <code>EXECUTE = 4</code>. Combine them with <code>|</code> and test them with
+            <code>&amp;</code>. This is exactly how Unix file permissions work.
+        </li>
+    </ol>
+</div>
+
+<div class="resources">
+    <h3>Further Reading</h3>
+    <ul>
+        <li><strong>Books:</strong> K&amp;R Chapter 5.11 (Pointers to Functions), Chapter 2.9 (Bitwise Operators).</li>
+        <li><strong>Books:</strong> K&amp;R Chapter 4.11 (The C Preprocessor).</li>
+        <li><strong>Online:</strong> <a href="https://beej.us/guide/bgc/html/split/function-pointers.html">Beej's Guide: Function Pointers</a></li>
+        <li><strong>Online:</strong> <a href="https://beej.us/guide/bgc/html/split/the-c-preprocessor.html">Beej's Guide: The C Preprocessor</a></li>
+    </ul>
+</div>
+
+<div class="chapter-nav">
+    <a href="13-debugging.html">&larr; Chapter 13: Debugging</a>
+    <a href="../index.html">Home</a>
+    <a href="15-next-steps.html">Chapter 15: Next Steps &rarr;</a>
+</div>
+
+</body>
+</html>

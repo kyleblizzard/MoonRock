@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Learning C by Building a Compositor</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<h1>Learning C by Building a Compositor</h1>
+<p class="subtitle">A beginner's guide to C programming, using the Crystal Compositor from AuraOS as our running example</p>
+
+<p>
+    Most programming tutorials teach you C with toy examples. Calculate a tip. Sort a list.
+    Yawn. We're going to do something different. We're going to learn C by looking at a real
+    program that does something genuinely cool: <strong>Crystal Compositor</strong>, the piece
+    of software that controls every single pixel on your screen in AuraOS. Every window, every
+    shadow, every animation — Crystal draws it all using OpenGL and about two thousand lines
+    of C.
+</p>
+
+<p>
+    You don't need any programming experience to follow along. We start from zero, build up
+    the fundamentals, and at every step I'll show you how those fundamentals appear in real
+    compositor code. By the end, you won't just understand C — you'll understand how a
+    compositor works, which is one of the most satisfying things a programmer can learn.
+</p>
+
+<h2>Chapters</h2>
+
+<ul class="chapter-list">
+    <li>
+        <a href="chapters/01-what-is-c.html">
+            <span class="chapter-number">01</span>What Is C? Why Should You Care?
+        </a>
+    </li>
+    <li>
+        <a href="chapters/02-hello-world.html">
+            <span class="chapter-number">02</span>Your First Program
+        </a>
+    </li>
+    <li>
+        <a href="chapters/03-variables.html">
+            <span class="chapter-number">03</span>Variables — Giving Names to Things
+        </a>
+    </li>
+    <li>
+        <a href="chapters/04-functions.html">
+            <span class="chapter-number">04</span>Functions — Teaching Your Program New Tricks
+        </a>
+    </li>
+    <li>
+        <a href="chapters/05-control-flow.html">
+            <span class="chapter-number">05</span>Making Decisions — if, else, loops
+        </a>
+    </li>
+    <li>
+        <a href="chapters/06-structs.html">
+            <span class="chapter-number">06</span>Structs — Building Your Own Types
+        </a>
+    </li>
+</ul>
+
+<h2>What You'll Need</h2>
+
+<p>Not much, honestly. If you're reading this, you're already most of the way there.</p>
+
+<ul>
+    <li><strong>A computer.</strong> Mac, Linux, Windows — doesn't matter. C runs everywhere. That's kind of the whole point.</li>
+    <li><strong>A text editor.</strong> VS Code is great. Sublime Text is great. Vim if you're feeling brave. Notepad if you're feeling masochistic. Whatever you're comfortable with.</li>
+    <li><strong>A terminal.</strong> That black window with the blinking cursor. On Mac it's called Terminal. On Linux you probably already have one open. On Windows, install <a href="https://learn.microsoft.com/en-us/windows/wsl/install">WSL</a> and use that.</li>
+    <li><strong>A C compiler.</strong> On Mac: <code>xcode-select --install</code>. On Linux: <code>sudo apt install gcc</code>. On WSL: same as Linux.</li>
+    <li><strong>Curiosity.</strong> This is the most important one. If you want to know how things work — really work, at the metal — you're in the right place.</li>
+</ul>
+
+<div class="tip">
+    <strong>A note on the Crystal code:</strong> Don't worry if the real code examples look intimidating at first.
+    That's completely normal. The whole point of this tutorial is to get you from "what does any of this mean"
+    to "oh, I see exactly what's happening here." We'll take it one piece at a time.
+</div>
+
+<p style="margin-top: 2em; text-align: center; color: #888;">
+    <em>Let's get started.</em> <a href="chapters/01-what-is-c.html">Chapter 1: What Is C? &rarr;</a>
+</p>
+
+</body>
+</html>

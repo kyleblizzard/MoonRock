@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chapter 8: Arrays and Memory — Learning C by Building a Compositor</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<h1>Chapter 8: Arrays and Memory — Managing Your Own Resources</h1>
+
+<h2>Arrays: Rows of Mailboxes</h2>
+
+<p>
+    An array is a contiguous block of memory holding multiple values of the same type. Think of
+    it as a row of identical mailboxes, numbered starting from zero. You declare one by putting
+    the count in square brackets:
+</p>
+
+<pre><code><span class="kw">int</span> scores[<span class="num">5</span>];          <span class="cmt">// 5 integers, side by side in memory</span>
+scores[<span class="num">0</span>] = <span class="num">90</span>;         <span class="cmt">// first element (index 0)</span>
+scores[<span class="num">1</span>] = <span class="num">85</span>;         <span class="cmt">// second element</span>
+scores[<span class="num">4</span>] = <span class="num">72</span>;         <span class="cmt">// last element (index 4, NOT 5!)</span></code></pre>
+
+<p>
+    The most important thing to remember: array indices start at 0 and the last valid index is
+    <code>size - 1</code>. An array of 5 elements has indices 0, 1, 2, 3, 4. There is no index 5.
+    If you access <code>scores[5]</code>, you're reading or writing memory that doesn't belong to
+    your array. C won't stop you. That's your problem now.
+</p>
+
+<p>
+    You can also initialize an array on one line:
+</p>
+
+<pre><code><span class="kw">int</span> scores[<span class="num">5</span>] = { <span class="num">90</span>, <span class="num">85</span>, <span class="num">78</span>, <span class="num">92</span>, <span class="num">72</span> };</code></pre>
+
+<h2>Crystal's Window Array</h2>
+
+<p>
+    Crystal tracks every window on your screen in a fixed-size array:
+</p>
+
+<pre><code><span class="kw">struct</span> <span class="type">WindowTexture</span> windows[MAX_CLIENTS];   <span class="cmt">// MAX_CLIENTS = 256</span>
+<span class="kw">int</span> window_count;                             <span class="cmt">// how many are actually used</span></code></pre>
+
+<p>
+    This is a classic pattern in C: allocate a fixed-size array and keep a separate count of how
+    many slots are actually filled. When a new window appears, Crystal puts it in
+    <code>windows[window_count]</code> and increments the count. When a window closes, it removes
+    it from the array and decrements the count.
+</p>
+
+<p>
+    The window manager does the same thing:
+</p>
+
+<pre><code><span class="type">Client</span> clients[MAX_CLIENTS];   <span class="cmt">// the window list</span>
+<span class="kw">int</span> num_clients;               <span class="cmt">// how many are active</span></code></pre>
+
+<p>
+    When it needs to find a particular window, it loops through:
+</p>
+
+<pre><code><span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i < wm-&gt;num_clients; i++) {
+    <span class="kw">if</span> (wm-&gt;clients[i].client == w)
+        <span class="kw">return</span> &amp;wm-&gt;clients[i];
+}</code></pre>
+
+<p>
+    This is linear search — check each element one by one. For 256 elements, it's plenty fast.
+    For a million elements, you'd want a smarter data structure. But for a window manager? Nobody
+    has 256 windows open. (And if they do, they need a vacation, not a faster algorithm.)
+</p>
+
+<h2>Stack vs. Heap: Where Memory Lives</h2>
+
+<p>
+    Every variable you've seen so far lives on the <em>stack</em>. The stack is automatic memory
+    — the compiler handles it for you. When you declare <code>int x = 5;</code> inside a function,
+    space for <code>x</code> is carved out on the stack when the function is called and reclaimed
+    when the function returns. You don't have to do anything.
+</p>
+
+<p>
+    But the stack has limits. It's small (typically 1-8 MB), and everything on it disappears when
+    the function returns. What if you need memory that:
+</p>
+
+<ul>
+    <li>Survives after the function that created it returns?</li>
+    <li>Is too large for the stack (think: a 4K image buffer)?</li>
+    <li>Needs to have its size determined at runtime?</li>
+</ul>
+
+<p>
+    That's where the <em>heap</em> comes in. The heap is manual memory — you ask for it explicitly,
+    and you must give it back explicitly. The tools are <code>malloc</code>, <code>calloc</code>,
+    and <code>free</code>.
+</p>
+
+<h2>malloc and free: You Asked for It, You Return It</h2>
+
+<pre><code><span class="pp">#include</span> <span class="str">&lt;stdlib.h&gt;</span>   <span class="cmt">// for malloc, calloc, free</span>
+
+<span class="cmt">// Allocate space for 100 integers on the heap</span>
+<span class="kw">int</span> *numbers = <span class="fn">malloc</span>(<span class="num">100</span> * <span class="kw">sizeof</span>(<span class="kw">int</span>));
+
+<span class="cmt">// Use it just like a regular array</span>
+numbers[<span class="num">0</span>] = <span class="num">42</span>;
+numbers[<span class="num">99</span>] = <span class="num">17</span>;
+
+<span class="cmt">// When you're done, give the memory back</span>
+<span class="fn">free</span>(numbers);</code></pre>
+
+<p>
+    <code>malloc(size)</code> asks the operating system for <code>size</code> bytes of memory and
+    returns a pointer to it. <code>sizeof(int)</code> tells you how many bytes an <code>int</code>
+    takes (usually 4), so <code>100 * sizeof(int)</code> is 400 bytes. The memory is yours until
+    you call <code>free()</code>.
+</p>
+
+<p>
+    <code>calloc</code> is like <code>malloc</code> but with two differences: it takes two
+    arguments (count and size per element) and it zero-initializes the memory. <code>malloc</code>
+    gives you whatever garbage was there before. <code>calloc</code> gives you clean zeros.
+</p>
+
+<h2>Crystal's Shadow Buffer: calloc in the Wild</h2>
+
+<p>
+    Here's the real code where Crystal allocates memory for shadow computation. This is from
+    the Gaussian blur routine that generates the soft shadows behind every window:
+</p>
+
+<pre><code><span class="cmt">// Allocate a single-channel (grayscale) buffer for the shadow.</span>
+<span class="cmt">// calloc zero-initializes, so the shadow starts fully transparent.</span>
+<span class="kw">unsigned char</span> *shadow = <span class="fn">calloc</span>((<span class="kw">size_t</span>)shadow_w * shadow_h, <span class="num">1</span>);
+<span class="kw">if</span> (!shadow) <span class="kw">return</span>;
+
+<span class="cmt">// ... hundreds of lines of blur math ...</span>
+
+<span class="cmt">// Temporary buffer for ping-ponging between blur passes</span>
+<span class="kw">unsigned char</span> *temp = <span class="fn">calloc</span>((<span class="kw">size_t</span>)shadow_w * shadow_h, <span class="num">1</span>);
+<span class="kw">if</span> (!temp) { <span class="fn">free</span>(shadow); <span class="kw">return</span>; }
+
+<span class="cmt">// ... do all three blur passes ...</span>
+
+<span class="cmt">// Upload the blurred result to the GPU, then free the CPU buffers</span>
+<span class="fn">free</span>(temp);
+<span class="fn">free</span>(shadow);</code></pre>
+
+<p>
+    A few things to notice here:
+</p>
+
+<ul>
+    <li><code>calloc(shadow_w * shadow_h, 1)</code> allocates enough bytes for a grayscale image of width <code>shadow_w</code> and height <code>shadow_h</code>. Each pixel is 1 byte.</li>
+    <li>After <code>calloc</code>, the code checks if the pointer is NULL. <code>malloc</code> and <code>calloc</code> return NULL if the system is out of memory. Always check.</li>
+    <li>When the second <code>calloc</code> fails, the code frees the first buffer before returning. If it didn't, that memory would leak.</li>
+    <li>Both buffers are freed at the end. The shadow data has been uploaded to the GPU, so the CPU copies are no longer needed.</li>
+</ul>
+
+<p>
+    This is the rhythm of manual memory management: allocate, use, free. Every <code>malloc</code>
+    or <code>calloc</code> must eventually have a matching <code>free</code>. It's like checking
+    out a library book — you have to return it, or eventually the library runs out of books.
+</p>
+
+<h2>Memory Leaks</h2>
+
+<p>
+    A memory leak happens when you allocate memory but never free it. Your program slowly
+    eats more and more RAM until it either runs out or the system kills it. The terrifying
+    thing is that the program keeps working — it just gets hungrier over time, like a
+    tapeworm.
+</p>
+
+<pre><code><span class="cmt">// Memory leak! The pointer is lost, memory is never freed.</span>
+<span class="kw">void</span> <span class="fn">leak_example</span>(<span class="kw">void</span>)
+{
+    <span class="kw">int</span> *data = <span class="fn">malloc</span>(<span class="num">1000</span> * <span class="kw">sizeof</span>(<span class="kw">int</span>));
+    <span class="cmt">// ... use data ...</span>
+    <span class="kw">return</span>;   <span class="cmt">// oops — never called free(data)!</span>
+}</code></pre>
+
+<p>
+    Every time this function is called, 4000 bytes of memory disappear forever (until the
+    program exits). Call it a million times and you've leaked 4 GB. In a long-running program
+    like a compositor that runs for hours or days, memory leaks are critical bugs.
+</p>
+
+<div class="tip">
+    <strong>A tool called <a href="https://valgrind.org/">Valgrind</a></strong> can track every
+    allocation in your program and tell you exactly which ones were never freed. It's like an
+    X-ray for memory bugs. Run your program through Valgrind during development and it will
+    save you from the most insidious class of C bugs.
+</div>
+
+<h2>Buffer Overflows</h2>
+
+<p>
+    Writing past the end of an array is called a buffer overflow. It's one of the most
+    dangerous bugs in computing — not just a crash, but a potential security vulnerability.
+</p>
+
+<pre><code><span class="kw">char</span> name[<span class="num">8</span>];
+<span class="fn">strcpy</span>(name, <span class="str">"Alexander"</span>);   <span class="cmt">// "Alexander" is 9 chars + null = 10 bytes</span>
+                              <span class="cmt">// but name only has room for 8!</span></code></pre>
+
+<p>
+    The string "Alexander" is too long for the buffer. The extra characters overflow into
+    adjacent memory, corrupting whatever was stored there. If an attacker controls the data,
+    they can potentially overwrite return addresses on the stack and hijack the program's
+    execution. This is how many real-world exploits work — buffer overflows in C programs
+    have been responsible for some of the biggest security breaches in history.
+</p>
+
+<p>
+    The fix? Always check sizes. Use <code>strncpy</code> instead of <code>strcpy</code>.
+    Use <code>snprintf</code> instead of <code>sprintf</code>. Never trust user input to be
+    the right length. Crystal's code uses <code>snprintf</code> everywhere it builds strings:
+</p>
+
+<pre><code><span class="cmt">// Safe — snprintf will never write more than sizeof(path) bytes</span>
+<span class="fn">snprintf</span>(path, <span class="kw">sizeof</span>(path),
+         <span class="str">"%s/.local/share/aqua-widgets/sl_close_button.png"</span>, home);</code></pre>
+
+<h2>Arrays and Pointers: The Connection</h2>
+
+<p>
+    Here's a C secret that confuses everyone at first: arrays and pointers are deeply related.
+    When you pass an array to a function, it "decays" into a pointer to its first element.
+    The function receives a pointer, not a copy of the entire array.
+</p>
+
+<pre><code><span class="kw">void</span> <span class="fn">print_array</span>(<span class="kw">int</span> *arr, <span class="kw">int</span> len)
+{
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i < len; i++) {
+        <span class="fn">printf</span>(<span class="str">"%d "</span>, arr[i]);
+    }
+    <span class="fn">printf</span>(<span class="str">"\n"</span>);
+}
+
+<span class="kw">int</span> numbers[] = { <span class="num">10</span>, <span class="num">20</span>, <span class="num">30</span>, <span class="num">40</span> };
+<span class="fn">print_array</span>(numbers, <span class="num">4</span>);   <span class="cmt">// passes a pointer, not a copy</span></code></pre>
+
+<p>
+    That's why functions that take arrays always need the length as a separate argument — the
+    pointer doesn't carry size information. You have to track it yourself. This is another spot
+    where C gives you power at the cost of responsibility.
+</p>
+
+<div class="try-it">
+    <h3>Try It Yourself</h3>
+    <ol>
+        <li>
+            Allocate an array of 100 integers with <code>malloc</code>. Fill it with squares:
+            <code>arr[0] = 0</code>, <code>arr[1] = 1</code>, <code>arr[2] = 4</code>,
+            <code>arr[3] = 9</code>... Print the first 10 values, then <code>free</code> the array.
+        </li>
+        <li>
+            Write a function <code>int sum(int *arr, int len)</code> that returns the sum of an
+            array. Test it with a few different arrays.
+        </li>
+        <li>
+            <strong>Challenge:</strong> Write a function that takes two arrays and their lengths,
+            allocates a new array big enough to hold both, copies both into it (use a loop), and
+            returns the new array. The caller is responsible for freeing it. This is a simple
+            version of what Crystal does when it reorders its window array.
+        </li>
+    </ol>
+</div>
+
+<div class="resources">
+    <h3>Further Reading</h3>
+    <ul>
+        <li><strong>Books:</strong> K&amp;R Chapter 5.3-5.5 — Pointers and Arrays, Address Arithmetic.</li>
+        <li><strong>Books:</strong> <em>Absolute Beginner's Guide</em>, Chapter 16 (Arrays).</li>
+        <li><strong>Online:</strong> <a href="https://beej.us/guide/bgc/html/split/arrays.html">Beej's Guide: Arrays</a></li>
+        <li><strong>Tool:</strong> <a href="https://valgrind.org/">Valgrind</a> — memory debugging tool. Run <code>valgrind ./myprogram</code> and it will report leaks, overflows, and use-after-free.</li>
+    </ul>
+</div>
+
+<div class="chapter-nav">
+    <a href="07-pointers.html">&larr; Chapter 7: Pointers</a>
+    <a href="../index.html">Home</a>
+    <a href="09-headers.html">Chapter 9: Header Files &rarr;</a>
+</div>
+
+</body>
+</html>

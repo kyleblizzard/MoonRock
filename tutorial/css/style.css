@@ -1,0 +1,222 @@
+/* ============================================================================
+   Learning C by Building a Compositor — Tutorial Stylesheet
+   Clean, readable, mobile-friendly. Dark code blocks, light background.
+   ============================================================================ */
+
+/* --- Base typography and layout --- */
+body {
+    font-family: 'Georgia', serif;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    line-height: 1.7;
+    color: #333;
+    background: #fafafa;
+}
+
+h1 {
+    font-size: 2em;
+    color: #1a1a1a;
+    border-bottom: 2px solid #3875D7;
+    padding-bottom: 10px;
+}
+
+h2 {
+    font-size: 1.5em;
+    color: #2a2a2a;
+    margin-top: 2em;
+}
+
+h3 {
+    font-size: 1.2em;
+    color: #3a3a3a;
+    margin-top: 1.5em;
+}
+
+p {
+    margin: 1em 0;
+}
+
+/* --- Code blocks (dark theme with syntax-ish coloring) --- */
+pre {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    padding: 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    margin: 1.2em 0;
+}
+
+/* Inline code */
+code {
+    background: #e8e8e8;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Menlo', monospace;
+    font-size: 0.9em;
+}
+
+/* Code inside pre blocks should not get the inline styling */
+pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+}
+
+/* --- Syntax highlighting classes for code blocks --- */
+.kw  { color: #569cd6; }   /* keywords: int, void, if, return, etc. */
+.fn  { color: #dcdcaa; }   /* function names */
+.str { color: #ce9178; }   /* strings */
+.num { color: #b5cea8; }   /* numbers */
+.cmt { color: #6a9955; }   /* comments */
+.pp  { color: #c586c0; }   /* preprocessor directives: #include, #define */
+.type { color: #4ec9b0; }  /* type names: AuraWM, Client, etc. */
+
+/* --- Callout boxes --- */
+.note {
+    background: #fff3cd;
+    border-left: 4px solid #ffc107;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 0 4px 4px 0;
+}
+
+.tip {
+    background: #d4edda;
+    border-left: 4px solid #28a745;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 0 4px 4px 0;
+}
+
+.warning {
+    background: #f8d7da;
+    border-left: 4px solid #dc3545;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 0 4px 4px 0;
+}
+
+.try-it {
+    background: #d1ecf1;
+    border-left: 4px solid #17a2b8;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 0 4px 4px 0;
+}
+
+.try-it h3 {
+    margin-top: 0;
+    color: #0c5460;
+}
+
+/* --- Links --- */
+a {
+    color: #3875D7;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* --- Chapter navigation bar (bottom of each page) --- */
+.chapter-nav {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid #ddd;
+}
+
+.chapter-nav a {
+    font-weight: bold;
+}
+
+/* --- Chapter list on index page --- */
+.chapter-list {
+    list-style: none;
+    padding: 0;
+}
+
+.chapter-list li {
+    padding: 10px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.chapter-list li:last-child {
+    border-bottom: none;
+}
+
+.chapter-list a {
+    font-size: 1.1em;
+}
+
+.chapter-number {
+    color: #3875D7;
+    font-weight: bold;
+    margin-right: 8px;
+}
+
+/* --- Resources / book references section --- */
+.resources {
+    background: #f0f0f0;
+    padding: 16px;
+    border-radius: 8px;
+    margin-top: 2em;
+}
+
+.resources h3 {
+    margin-top: 0;
+}
+
+.resources ul {
+    margin-bottom: 0;
+}
+
+/* --- Subtitle on index --- */
+.subtitle {
+    font-size: 1.15em;
+    color: #555;
+    font-style: italic;
+    margin-top: -0.5em;
+}
+
+/* --- Banner/teaser code blocks --- */
+pre.banner {
+    text-align: center;
+    font-size: 15px;
+    line-height: 1.4;
+    color: #7ec8e3;
+}
+
+/* --- Responsive adjustments --- */
+@media (max-width: 600px) {
+    body {
+        padding: 12px;
+        font-size: 16px;
+    }
+
+    h1 {
+        font-size: 1.5em;
+    }
+
+    h2 {
+        font-size: 1.25em;
+    }
+
+    pre {
+        font-size: 12px;
+        padding: 12px;
+    }
+
+    .chapter-nav {
+        flex-direction: column;
+        gap: 10px;
+        text-align: center;
+    }
+}

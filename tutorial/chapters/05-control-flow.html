@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chapter 5: Control Flow — Learning C by Building a Compositor</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<h1>Chapter 5: Making Decisions — if, else, loops</h1>
+
+<h2>Programs That Think</h2>
+
+<p>
+    Up until now, our programs have been railroads — one track, no turns, start to finish.
+    That's fine for hello world, but real programs need to make decisions. "If the user clicked
+    the close button, close the window. If they dragged the title bar, move the window. If
+    neither, do nothing." Without branching and looping, a program can only do exactly one thing
+    in exactly one way. That's not a program — that's a recipe card.
+</p>
+
+<p>
+    Control flow is what makes programs interesting. It's the difference between a player piano
+    that plays one song and a musician who responds to the audience.
+</p>
+
+<h2>if / else: Making Decisions</h2>
+
+<p>
+    The simplest form of decision-making:
+</p>
+
+<pre><code><span class="kw">if</span> (temperature > <span class="num">100</span>) {
+    <span class="fn">printf</span>(<span class="str">"It's boiling!\n"</span>);
+}</code></pre>
+
+<p>
+    If the condition inside the parentheses is true, the code inside the braces runs. If it's
+    false, we skip it entirely. Simple as that.
+</p>
+
+<p>
+    You can add an <code>else</code> for the alternative:
+</p>
+
+<pre><code><span class="kw">if</span> (temperature > <span class="num">100</span>) {
+    <span class="fn">printf</span>(<span class="str">"It's boiling!\n"</span>);
+} <span class="kw">else</span> {
+    <span class="fn">printf</span>(<span class="str">"Not boiling yet.\n"</span>);
+}</code></pre>
+
+<p>
+    And you can chain them for multiple options:
+</p>
+
+<pre><code><span class="kw">if</span> (temperature > <span class="num">100</span>) {
+    <span class="fn">printf</span>(<span class="str">"Boiling!\n"</span>);
+} <span class="kw">else if</span> (temperature > <span class="num">50</span>) {
+    <span class="fn">printf</span>(<span class="str">"Hot.\n"</span>);
+} <span class="kw">else if</span> (temperature > <span class="num">20</span>) {
+    <span class="fn">printf</span>(<span class="str">"Comfortable.\n"</span>);
+} <span class="kw">else</span> {
+    <span class="fn">printf</span>(<span class="str">"Cold.\n"</span>);
+}</code></pre>
+
+<p>
+    Only one of these branches will run — C checks them top to bottom and takes the first one
+    that's true. If none are true, it runs the <code>else</code> (if there is one).
+</p>
+
+<h3>Comparison Operators</h3>
+
+<p>
+    The things you put inside <code>if</code> conditions:
+</p>
+
+<pre><code>a == b    <span class="cmt">// equal to (two equals signs! one = is assignment)</span>
+a != b    <span class="cmt">// not equal to</span>
+a > b     <span class="cmt">// greater than</span>
+a < b     <span class="cmt">// less than</span>
+a >= b    <span class="cmt">// greater than or equal</span>
+a <= b    <span class="cmt">// less than or equal</span></code></pre>
+
+<div class="warning">
+    <strong>The Classic Mistake:</strong> Writing <code>=</code> when you mean <code>==</code>.
+    <code>if (x = 5)</code> doesn't check if x equals 5 — it <em>assigns</em> 5 to x, which
+    is always true. This bug has bitten every C programmer alive. The compiler might warn you,
+    but it's perfectly legal C. Watch for it.
+</div>
+
+<h2>Crystal's Error Checking: if in the Wild</h2>
+
+<p>
+    Here's a pattern you'll see constantly in Crystal's code — checking if something failed
+    and handling the error:
+</p>
+
+<pre><code><span class="cmt">// From crystal_init() — checking if GLX is available</span>
+<span class="kw">int</span> glx_error_base, glx_event_base;
+<span class="kw">if</span> (!<span class="fn">glXQueryExtension</span>(wm->dpy, &amp;glx_error_base, &amp;glx_event_base)) {
+    <span class="fn">fprintf</span>(stderr, <span class="str">"[crystal] ERROR: GLX extension not available.\n"</span>);
+    <span class="kw">return false</span>;
+}</code></pre>
+
+<p>
+    <code>glXQueryExtension()</code> returns true if GLX is available, false if it's not. The
+    <code>!</code> flips it: "if NOT available, print an error and bail out." This is the
+    bread and butter of C programming — try something, check if it worked, handle the failure.
+    You'll write this pattern hundreds of times.
+</p>
+
+<p>
+    And here's how the main function uses it:
+</p>
+
+<pre><code><span class="kw">if</span> (!<span class="fn">wm_init</span>(&amp;wm, display)) {
+    <span class="kw">return</span> <span class="num">1</span>;   <span class="cmt">// couldn't initialize — exit with error code</span>
+}
+
+<span class="kw">if</span> (!<span class="fn">crystal_init</span>(&amp;wm)) {
+    <span class="fn">fprintf</span>(stderr, <span class="str">"[aura-wm] Crystal unavailable — no shadows\n"</span>);
+    <span class="cmt">// Note: we DON'T return here! The WM continues without compositing.</span>
+}</code></pre>
+
+<p>
+    Notice the difference: if the window manager can't initialize, the program exits (returns 1).
+    But if Crystal can't initialize, the program keeps running — you just don't get fancy shadows.
+    The <code>if</code> statement lets you make these kinds of nuanced decisions about how to
+    handle different situations.
+</p>
+
+<h2>while Loops: Keep Going</h2>
+
+<p>
+    A <code>while</code> loop repeats a block of code as long as a condition is true:
+</p>
+
+<pre><code><span class="kw">int</span> count = <span class="num">1</span>;
+<span class="kw">while</span> (count <= <span class="num">5</span>) {
+    <span class="fn">printf</span>(<span class="str">"%d\n"</span>, count);
+    count++;   <span class="cmt">// count++ is shorthand for count = count + 1</span>
+}</code></pre>
+
+<p>
+    This prints 1 through 5. Each time through the loop, it checks: is <code>count</code> still
+    less than or equal to 5? If yes, run the body again. If no, stop.
+</p>
+
+<p>
+    The <code>++</code> operator increments a variable by 1. It's so common in C that the C++
+    language was literally named after it. (Get it? C, plus plus. C++. I'll see myself out.)
+</p>
+
+<h2>Crystal's Event Loop: The Heartbeat</h2>
+
+<p>
+    Here's the most important <code>while</code> loop in the entire window manager. This is
+    the event loop from <code>events.c</code> — the heartbeat of the compositor:
+</p>
+
+<pre><code><span class="kw">while</span> (wm->running) {
+    <span class="type">XEvent</span> ev;
+    <span class="fn">XNextEvent</span>(wm->dpy, &amp;ev);
+
+    <span class="cmt">// Let Crystal handle compositor events first</span>
+    <span class="kw">if</span> (<span class="fn">crystal_handle_event</span>(wm, &amp;ev)) {
+        <span class="cmt">// Crystal consumed the event — skip normal dispatch</span>
+    } <span class="kw">else if</span> (ev.type < LASTEvent &amp;&amp; handlers[ev.type]) {
+        handlers[ev.type](wm, &amp;ev);
+    }
+
+    <span class="cmt">// Draw all windows with shadows</span>
+    <span class="kw">if</span> (<span class="fn">crystal_is_active</span>()) {
+        <span class="fn">crystal_composite</span>(wm);
+    }
+}</code></pre>
+
+<p>
+    This loop runs <em>forever</em> — or rather, until someone sets <code>wm->running</code> to
+    <code>false</code> (which happens when you press Ctrl+C or log out). Each time through, it:
+</p>
+
+<ol>
+    <li>Waits for the next event from the X server (a mouse click, a key press, a window resize...).</li>
+    <li>Lets Crystal handle it if it's a compositor event (like damage).</li>
+    <li>Otherwise, dispatches it to the appropriate handler function.</li>
+    <li>Redraws all the windows on screen.</li>
+</ol>
+
+<p>
+    This is the core of every interactive program you've ever used. Your browser has an event
+    loop. Your phone's OS has an event loop. Every video game has an event loop. It's always the
+    same pattern: wait for input, process it, update the screen, repeat. A <code>while</code>
+    loop doing that simple dance, thousands of times per second.
+</p>
+
+<h2>for Loops: When You Know How Many Times</h2>
+
+<p>
+    A <code>for</code> loop is a <code>while</code> loop with the counter built in:
+</p>
+
+<pre><code><span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i < <span class="num">10</span>; i++) {
+    <span class="fn">printf</span>(<span class="str">"i = %d\n"</span>, i);
+}</code></pre>
+
+<p>
+    This prints 0 through 9. The three parts inside the parentheses are:
+</p>
+
+<ol>
+    <li><code>int i = 0</code> — <strong>initialization</strong>. Set up the counter. Runs once before the loop starts.</li>
+    <li><code>i &lt; 10</code> — <strong>condition</strong>. Checked before each iteration. If false, stop.</li>
+    <li><code>i++</code> — <strong>update</strong>. Runs after each iteration. Advance the counter.</li>
+</ol>
+
+<p>
+    Use <code>for</code> when you know how many times you want to loop. Use <code>while</code>
+    when you're looping until some condition changes. They're interchangeable, but the right
+    choice makes your intent clearer.
+</p>
+
+<div class="note">
+    <strong>Why start at 0?</strong> In C, arrays (which we'll cover later) start at index 0. So
+    programmers got into the habit of counting from 0. <code>for (int i = 0; i &lt; n; i++)</code>
+    is the most common loop in all of C. You'll write it in your sleep.
+</div>
+
+<h2>Logical Operators: Combining Conditions</h2>
+
+<p>
+    Sometimes one condition isn't enough. You need "if this AND that" or "if this OR that":
+</p>
+
+<pre><code><span class="cmt">// AND: both must be true</span>
+<span class="kw">if</span> (age >= <span class="num">18</span> &amp;&amp; has_license) {
+    <span class="fn">printf</span>(<span class="str">"You can drive.\n"</span>);
+}
+
+<span class="cmt">// OR: at least one must be true</span>
+<span class="kw">if</span> (day == <span class="num">6</span> || day == <span class="num">7</span>) {
+    <span class="fn">printf</span>(<span class="str">"It's the weekend!\n"</span>);
+}
+
+<span class="cmt">// NOT: flip true to false, false to true</span>
+<span class="kw">if</span> (!is_raining) {
+    <span class="fn">printf</span>(<span class="str">"No umbrella needed.\n"</span>);
+}</code></pre>
+
+<p>
+    You saw <code>&amp;&amp;</code> in Crystal's event loop: <code>ev.type &lt; LASTEvent &amp;&amp;
+    handlers[ev.type]</code>. Both conditions must be true — the event type must be valid AND
+    there must be a handler registered for it. If either is false, we skip it.
+</p>
+
+<h2>break and continue</h2>
+
+<p>
+    Two keywords that give you finer control over loops:
+</p>
+
+<pre><code><span class="cmt">// break: exit the loop immediately</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i < <span class="num">100</span>; i++) {
+    <span class="kw">if</span> (i == <span class="num">42</span>) <span class="kw">break</span>;   <span class="cmt">// stop at 42</span>
+    <span class="fn">printf</span>(<span class="str">"%d\n"</span>, i);
+}
+
+<span class="cmt">// continue: skip the rest of this iteration, go to the next one</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i < <span class="num">10</span>; i++) {
+    <span class="kw">if</span> (i % <span class="num">2</span> == <span class="num">0</span>) <span class="kw">continue</span>;  <span class="cmt">// skip even numbers</span>
+    <span class="fn">printf</span>(<span class="str">"%d\n"</span>, i);              <span class="cmt">// only prints odd numbers</span>
+}</code></pre>
+
+<p>
+    <code>break</code> is an emergency exit. <code>continue</code> is "skip this one and move
+    on." Both are useful, both are common, and both make your loops more expressive.
+</p>
+
+<div class="try-it">
+    <h3>Try It Yourself</h3>
+    <ol>
+        <li>Write a program that prints the numbers 1 to 20, but says "fizz" for multiples of 3 and "buzz" for multiples of 5. If it's a multiple of both, print "fizzbuzz." (This is a classic programming exercise.)</li>
+        <li>Write a <code>while</code> loop that counts down from 10 to 1, then prints "Liftoff!"</li>
+        <li>Write a <code>for</code> loop that calculates the sum of all numbers from 1 to 100. (The answer should be 5050 — the same result Gauss figured out when he was seven years old.)</li>
+    </ol>
+</div>
+
+<div class="resources">
+    <h3>Further Reading</h3>
+    <ul>
+        <li><strong>Books:</strong> K&amp;R Chapter 1.3 (The For Statement), Chapter 3 (Control Flow).</li>
+        <li><strong>Books:</strong> <em>Absolute Beginner's Guide</em>, Chapters 10-14.</li>
+        <li><strong>Online:</strong> <a href="https://beej.us/guide/bgc/html/split/flow-control.html">Beej's Guide: Flow Control</a></li>
+    </ul>
+</div>
+
+<div class="chapter-nav">
+    <a href="04-functions.html">&larr; Chapter 4: Functions</a>
+    <a href="../index.html">Home</a>
+    <a href="06-structs.html">Chapter 6: Structs &rarr;</a>
+</div>
+
+</body>
+</html>

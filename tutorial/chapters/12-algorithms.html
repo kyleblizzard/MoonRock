@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chapter 12: Algorithms — Learning C by Building a Compositor</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<h1>Chapter 12: Algorithms — The Shadow Behind Every Window</h1>
+
+<h2>What Is an Algorithm?</h2>
+
+<p>
+    An algorithm is just a step-by-step procedure for solving a problem. A recipe is an
+    algorithm. Driving directions are an algorithm. "Check each sock in the pile until you
+    find a matching pair" is an algorithm (a linear search, to be precise).
+</p>
+
+<p>
+    We've already seen simple algorithms — linear search through the client array, iterating
+    over windows. But Crystal has a genuinely interesting algorithm hiding inside it: the
+    <strong>3-pass box blur approximation of Gaussian blur</strong>. It's how Crystal generates
+    those soft, realistic shadows behind every window. Let's tear it apart.
+</p>
+
+<h2>Why Shadows Need Blur</h2>
+
+<p>
+    A shadow isn't just a dark rectangle behind a window. Real shadows are soft — they're
+    darkest near the object and gradually fade to nothing at the edges. That soft gradient
+    is created by blurring a hard-edged shape.
+</p>
+
+<p>
+    The gold standard for smooth blurring is <em>Gaussian blur</em>, named after the bell curve.
+    A true Gaussian blur looks at every pixel in a large radius around each output pixel,
+    weighing nearby pixels heavily and distant pixels lightly. The result is a beautifully smooth
+    fade. The problem? A true Gaussian blur is expensive. For a blur radius of 22 pixels, each
+    output pixel needs to sample a 45x45 grid of neighbors. That's over 2,000 lookups per pixel.
+    For a 1920x1080 shadow, that's billions of operations per frame. Way too slow.
+</p>
+
+<h2>The Trick: Box Blur x3</h2>
+
+<p>
+    Here's the clever part. A <em>box blur</em> (a simple averaging filter) applied three times
+    in succession closely approximates a Gaussian blur. This isn't a hack — it's mathematically
+    proven. And a box blur can be computed in O(1) per pixel using a sliding window, regardless
+    of the blur radius. That changes everything.
+</p>
+
+<p>
+    Crystal's algorithm works in five steps:
+</p>
+
+<h3>Step 1: Create the Shadow Shape</h3>
+
+<pre><code><span class="cmt">// Allocate a grayscale buffer — one byte per pixel</span>
+<span class="kw">unsigned char</span> *shadow = <span class="fn">calloc</span>((<span class="kw">size_t</span>)shadow_w * shadow_h, <span class="num">1</span>);
+
+<span class="cmt">// Fill in a solid white rectangle where the window sits</span>
+<span class="kw">for</span> (<span class="kw">int</span> y = pad; y < pad + chrome_h; y++) {
+    <span class="fn">memset</span>(&amp;shadow[y * shadow_w + pad], <span class="num">255</span>, (<span class="kw">size_t</span>)chrome_w);
+}</code></pre>
+
+<p>
+    We start with a blank buffer (all zeros — fully transparent) and paint a solid white
+    rectangle where the window is. This is the "seed" — the hard-edged shape that we'll blur
+    into a soft shadow. The <code>pad</code> around the rectangle gives the blur room to fade out.
+</p>
+
+<h3>Step 2: Horizontal Box Blur</h3>
+
+<p>
+    For each row of pixels, slide a window of width <code>kernel_width</code> across the row.
+    Keep a running sum as you go. Each output pixel is the average of its horizontal neighbors.
+</p>
+
+<pre><code><span class="kw">for</span> (<span class="kw">int</span> y = <span class="num">0</span>; y < shadow_h; y++) {
+    <span class="kw">int</span> sum = <span class="num">0</span>;
+    <span class="cmt">// Build initial sum for the first window position</span>
+    <span class="kw">for</span> (<span class="kw">int</span> k = -blur_radius; k <= blur_radius; k++) {
+        <span class="kw">int</span> sx = k < <span class="num">0</span> ? <span class="num">0</span> : k;   <span class="cmt">// clamp to edge</span>
+        sum += shadow[y * shadow_w + sx];
+    }
+    temp[y * shadow_w] = sum / kernel_width;
+
+    <span class="cmt">// Slide the window across the row: add the new pixel, drop the old one</span>
+    <span class="kw">for</span> (<span class="kw">int</span> x = <span class="num">1</span>; x < shadow_w; x++) {
+        <span class="cmt">// Add the pixel entering the window on the right</span>
+        <span class="cmt">// Subtract the pixel leaving the window on the left</span>
+        <span class="cmt">// Divide by kernel_width to get the new average</span>
+        temp[y * shadow_w + x] = new_sum / kernel_width;
+    }
+}</code></pre>
+
+<p>
+    The key insight: when the window slides one pixel to the right, you don't recompute the
+    entire sum. You just add the new pixel entering on the right and subtract the pixel leaving
+    on the left. That's two operations per pixel, no matter how large the blur radius is. That's
+    what O(1) per pixel means.
+</p>
+
+<h3>Step 3: Vertical Box Blur</h3>
+
+<p>
+    Same thing, but sliding vertically instead of horizontally. This makes the blur "separable"
+    — a 2D blur decomposed into two 1D blurs. A 2D box blur over a 45x45 area would need 2,025
+    lookups per pixel. Two 1D blurs of width 45 need only 90 lookups total (and with the sliding
+    window trick, just 4 operations).
+</p>
+
+<h3>Step 4: Repeat Two More Times</h3>
+
+<p>
+    Crystal runs the horizontal+vertical pass three times. Each pass smooths the result further.
+    After one pass, the shadow has blocky, square edges. After two passes, it's smoother. After
+    three passes, it's virtually indistinguishable from a true Gaussian blur.
+</p>
+
+<pre><code><span class="kw">for</span> (<span class="kw">int</span> pass = <span class="num">0</span>; pass < <span class="num">3</span>; pass++) {
+    <span class="cmt">// Horizontal blur: shadow → temp</span>
+    <span class="cmt">// Vertical blur:   temp → shadow</span>
+}</code></pre>
+
+<h3>Step 5: Upload to GPU</h3>
+
+<p>
+    The final blurred buffer is uploaded to the GPU as an OpenGL texture. Crystal draws it as
+    a semi-transparent black quad behind the window. The alpha channel comes from the blur
+    buffer — bright pixels are opaque shadow, dark pixels are transparent. The result: a soft,
+    realistic drop shadow that fades smoothly from the window's edge.
+</p>
+
+<p>
+    And here's the beautiful part: the shadow texture is cached. It's only regenerated when the
+    window resizes. During normal operation — moving windows, switching focus, scrolling — the
+    shadow is just a pre-computed texture. Zero CPU cost.
+</p>
+
+<h2>Why This Matters</h2>
+
+<p>
+    This algorithm is a perfect example of a pattern you'll see everywhere in programming:
+    take an expensive operation, find a mathematically equivalent but cheaper approximation,
+    and cache the result. Crystal's shadows look identical to a true Gaussian blur but compute
+    in a fraction of the time.
+</p>
+
+<p>
+    The same box-blur-x3 trick is used in CSS <code>blur()</code> filters, Photoshop's Gaussian
+    blur, iOS's frosted glass effects, and dozens of other places. It's one of those algorithms
+    that appears simple on the surface but has deep mathematical elegance underneath.
+</p>
+
+<div class="note">
+    <strong>The math behind it:</strong> The central limit theorem tells us that convolving any
+    distribution with itself enough times approaches a Gaussian (bell curve). A box function
+    convolved with itself three times gives a very good Gaussian approximation. This was first
+    described in W. Wells' 1986 paper and has been a standard trick in graphics ever since.
+</div>
+
+<div class="try-it">
+    <h3>Try It Yourself</h3>
+    <ol>
+        <li>
+            Write a program that creates an array of 20 integers, fills the middle 10 with the
+            value 255 (and the rest with 0), then applies a simple box blur with radius 2. Print
+            the array before and after the blur to see the smoothing effect.
+        </li>
+        <li>
+            Modify your blur to run 3 passes. Compare the output to a single pass — notice how
+            three passes produce a smoother, more gradual falloff.
+        </li>
+        <li>
+            <strong>Challenge:</strong> Implement the sliding window optimization. Instead of
+            re-summing all values in the kernel for each position, add the new value and subtract
+            the old one. Verify your output matches the naive version.
+        </li>
+    </ol>
+</div>
+
+<div class="resources">
+    <h3>Further Reading</h3>
+    <ul>
+        <li><strong>Paper:</strong> <em>"Efficient Gaussian blur with linear sampling"</em> — a classic reference on fast blur techniques.</li>
+        <li><strong>Online:</strong> <a href="https://blog.ivank.net/fastest-gaussian-blur.html">Fastest Gaussian Blur (Ivan Kutskir)</a> — excellent visual explanation of the box-blur-x3 technique.</li>
+        <li><strong>Books:</strong> K&amp;R Chapter 1 (basic algorithms and loops).</li>
+        <li><strong>Online:</strong> <a href="https://en.wikipedia.org/wiki/Box_blur">Wikipedia: Box Blur</a> — concise mathematical treatment.</li>
+    </ul>
+</div>
+
+<div class="chapter-nav">
+    <a href="11-build-systems.html">&larr; Chapter 11: Build Systems</a>
+    <a href="../index.html">Home</a>
+    <a href="13-debugging.html">Chapter 13: Debugging &rarr;</a>
+</div>
+
+</body>
+</html>

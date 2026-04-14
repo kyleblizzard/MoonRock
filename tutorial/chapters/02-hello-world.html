@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chapter 2: Your First Program — Learning C by Building a Compositor</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<h1>Chapter 2: Your First Program</h1>
+
+<h2>The Sacred Tradition</h2>
+
+<p>
+    Every programming tutorial since the dawn of time starts with "Hello, World." It's tradition.
+    It's comforting. It's also surprisingly useful, because if you can get this tiny program to
+    compile and run, you've proven that your entire toolchain works — the editor, the compiler,
+    the terminal, all of it. That's not nothing.
+</p>
+
+<p>
+    Open your text editor. Create a new file called <code>hello.c</code>. Type this:
+</p>
+
+<pre><code><span class="pp">#include</span> <span class="str">&lt;stdio.h&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">void</span>)
+{
+    <span class="fn">printf</span>(<span class="str">"Hello, World!\n"</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+<p>
+    That's it. Six lines. Let's break down every single one.
+</p>
+
+<h2>Line by Line</h2>
+
+<h3><code>#include &lt;stdio.h&gt;</code></h3>
+
+<p>
+    This is a <em>preprocessor directive</em>. Before the compiler even looks at your code,
+    a preprocessor runs through it first and handles lines that start with <code>#</code>.
+</p>
+
+<p>
+    <code>#include</code> means "copy the contents of this file into my program." It's like
+    importing a toolbox. <code>stdio.h</code> stands for "standard input/output header" — it
+    gives you access to functions like <code>printf</code> that let your program talk to the
+    screen.
+</p>
+
+<p>
+    Without this line, the compiler wouldn't know what <code>printf</code> is. It would look
+    at your code, see <code>printf</code>, and say "I have no idea what that means" and
+    refuse to compile. Fair enough.
+</p>
+
+<h3><code>int main(void)</code></h3>
+
+<p>
+    This is the <em>entry point</em> of your program. When you run your program, the computer
+    looks for a function called <code>main</code> and starts executing the code inside it.
+    Think of it as the starting line of a race. Every C program has exactly one <code>main</code>.
+</p>
+
+<p>
+    <code>int</code> means this function returns an integer (a whole number) when it's done.
+    <code>void</code> in the parentheses means it takes no inputs. We'll talk more about
+    functions in Chapter 4.
+</p>
+
+<h3><code>{ }</code> — The Curly Braces</h3>
+
+<p>
+    Everything between <code>{</code> and <code>}</code> is the <em>body</em> of the function.
+    It's the actual instructions. "When main runs, do everything between these braces."
+</p>
+
+<h3><code>printf("Hello, World!\n");</code></h3>
+
+<p>
+    This is the money line. <code>printf</code> stands for "print formatted" — it sends text to
+    the terminal. The text you want to print goes inside double quotes. The <code>\n</code> at
+    the end is a <em>newline character</em> — it tells the terminal to move to the next line
+    after printing, so your prompt doesn't awkwardly land on the same line as your output.
+</p>
+
+<p>
+    The semicolon at the end is how C knows you're done with a statement. It's like a period at
+    the end of a sentence. Forget it and the compiler will complain. You will forget it. Everyone
+    does. It's a rite of passage.
+</p>
+
+<h3><code>return 0;</code></h3>
+
+<p>
+    This tells the operating system "I'm done, and everything went fine." A return value of
+    <code>0</code> means success. Any other number means something went wrong. This is a
+    convention that goes all the way back to Unix — and every script, every process manager,
+    every CI pipeline in the world still checks this number.
+</p>
+
+<h2>Compile and Run</h2>
+
+<p>
+    Save your file. Open a terminal. Navigate to wherever you saved <code>hello.c</code>, and type:
+</p>
+
+<pre><code>gcc hello.c -o hello</code></pre>
+
+<p>
+    Here's what just happened:
+</p>
+
+<ul>
+    <li><code>gcc</code> — the GNU C Compiler. It reads your C code and turns it into a program your computer can actually execute.</li>
+    <li><code>hello.c</code> — your source file. The code you wrote.</li>
+    <li><code>-o hello</code> — "name the output file <code>hello</code>." Without this, gcc would name it <code>a.out</code>, which isn't very helpful.</li>
+</ul>
+
+<p>
+    If there are no errors (and there shouldn't be, unless you made a typo), you'll get no output.
+    Silence is golden in the terminal — it means everything worked.
+</p>
+
+<p>
+    Now run it:
+</p>
+
+<pre><code>./hello</code></pre>
+
+<p>
+    And you should see:
+</p>
+
+<pre><code>Hello, World!</code></pre>
+
+<p>
+    Congratulations. You just told a computer what to do and it listened. That might not seem like
+    much, but every program ever written — every game, every operating system, every compositor that
+    draws windows on your screen — started right here. Someone typed some text into a file, compiled
+    it, and ran it. The difference between this and Crystal Compositor is just scale and knowledge.
+    The process is exactly the same.
+</p>
+
+<h2>What a Real <code>main()</code> Looks Like</h2>
+
+<p>
+    Our hello world has a two-line <code>main</code>. Crystal Compositor's <code>main</code> is a
+    bit more involved. Here's the actual entry point of the AuraOS window manager:
+</p>
+
+<pre><code><span class="pp">#include</span> <span class="str">"wm.h"</span>
+<span class="pp">#include</span> <span class="str">"events.h"</span>
+<span class="pp">#include</span> <span class="str">"crystal.h"</span>
+<span class="pp">#include</span> <span class="str">&lt;stdio.h&gt;</span>
+<span class="pp">#include</span> <span class="str">&lt;signal.h&gt;</span>
+<span class="pp">#include</span> <span class="str">&lt;stdlib.h&gt;</span>
+
+<span class="kw">static</span> <span class="type">AuraWM</span> wm;
+
+<span class="kw">static void</span> <span class="fn">handle_signal</span>(<span class="kw">int</span> sig)
+{
+    (<span class="kw">void</span>)sig;
+    <span class="fn">fprintf</span>(stderr, <span class="str">"[aura-wm] Received signal %d, shutting down\n"</span>, sig);
+    wm.running = <span class="kw">false</span>;
+}
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> argc, <span class="kw">char</span> *argv[])
+{
+    (<span class="kw">void</span>)argc;
+    (<span class="kw">void</span>)argv;
+
+    <span class="fn">fprintf</span>(stderr, <span class="str">"╔══════════════════════════════════════╗\n"</span>);
+    <span class="fn">fprintf</span>(stderr, <span class="str">"║         AuraOS Window Manager        ║\n"</span>);
+    <span class="fn">fprintf</span>(stderr, <span class="str">"║   Pixel-Perfect Snow Leopard in C    ║\n"</span>);
+    <span class="fn">fprintf</span>(stderr, <span class="str">"╚══════════════════════════════════════╝\n"</span>);
+
+    <span class="cmt">// Handle shutdown signals gracefully</span>
+    <span class="fn">signal</span>(SIGINT, handle_signal);
+    <span class="fn">signal</span>(SIGTERM, handle_signal);
+
+    <span class="cmt">// Initialize the window manager</span>
+    <span class="kw">if</span> (!<span class="fn">wm_init</span>(&amp;wm, <span class="fn">getenv</span>(<span class="str">"DISPLAY"</span>))) {
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+
+    <span class="cmt">// Initialize Crystal compositor for shadows and effects</span>
+    <span class="kw">if</span> (!<span class="fn">crystal_init</span>(&amp;wm)) {
+        <span class="fn">fprintf</span>(stderr, <span class="str">"[aura-wm] Crystal unavailable — no shadows\n"</span>);
+    }
+
+    <span class="cmt">// Run the event loop (blocks until wm.running = false)</span>
+    <span class="fn">events_run</span>(&amp;wm);
+
+    <span class="cmt">// Clean shutdown</span>
+    <span class="fn">crystal_shutdown</span>(&amp;wm);
+    <span class="fn">wm_shutdown</span>(&amp;wm);
+
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+<p>
+    Don't panic. You're not supposed to understand all of this yet. But notice the shape of it.
+    See how it's still just <code>main</code> with some function calls inside? It includes some
+    headers, sets up some things, runs a loop, cleans up, and returns. The structure is the same
+    as our hello world — it's just doing more.
+</p>
+
+<p>
+    A few things to notice:
+</p>
+
+<ul>
+    <li>There are more <code>#include</code> lines — it's pulling in multiple toolboxes because it needs more tools.</li>
+    <li><code>fprintf(stderr, ...)</code> is like <code>printf</code>, but it writes to the <em>error stream</em> instead of the normal output. That's where log messages go.</li>
+    <li>The <code>signal()</code> calls set up handlers so the program shuts down cleanly when you press Ctrl+C.</li>
+    <li><code>return 1;</code> on failure — remember, non-zero means "something went wrong."</li>
+    <li>The program initializes things in order, runs a loop, then shuts down in <em>reverse</em> order. That pattern — set up, run, tear down — is everywhere in systems programming.</li>
+</ul>
+
+<div class="tip">
+    <strong>The reverse-order shutdown</strong> is worth remembering. Crystal depends on the window
+    manager being initialized, so Crystal must be shut down <em>before</em> the window manager.
+    Last in, first out — like a stack of plates. You'll see this pattern for the rest of your
+    programming career.
+</div>
+
+<div class="try-it">
+    <h3>Try It Yourself</h3>
+    <p>
+        Modify your <code>hello.c</code> to print your name. Then try printing two lines.
+        Then try printing a box like Crystal's banner using regular characters:
+    </p>
+<pre><code>+------+
+| Kyle |
++------+</code></pre>
+    <p>
+        Each <code>printf</code> call prints one line. You'll need several of them.
+    </p>
+</div>
+
+<div class="resources">
+    <h3>Further Reading</h3>
+    <ul>
+        <li><strong>Books:</strong> K&amp;R Chapter 1.1 — the original hello world, by the creators of C.</li>
+        <li><strong>Books:</strong> <em>Absolute Beginner's Guide</em>, Chapters 2-3.</li>
+        <li><strong>Online:</strong> <a href="https://godbolt.org/">Compiler Explorer (godbolt.org)</a> — paste your hello world and see what the compiler turns it into. Fascinating and slightly terrifying.</li>
+        <li><strong>Online:</strong> <a href="https://beej.us/guide/bgc/html/split/hello-world.html">Beej's Guide: Hello World</a></li>
+    </ul>
+</div>
+
+<div class="chapter-nav">
+    <a href="01-what-is-c.html">&larr; Chapter 1: What Is C?</a>
+    <a href="../index.html">Home</a>
+    <a href="03-variables.html">Chapter 3: Variables &rarr;</a>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chapter 3: Variables — Learning C by Building a Compositor</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<h1>Chapter 3: Variables — Giving Names to Things</h1>
+
+<h2>Boxes with Labels</h2>
+
+<p>
+    Imagine you have a wall of mailboxes. Each one has a label on it and can hold one thing.
+    That's basically what a variable is — a named container that holds a value. You put
+    something in, you can read it later, you can change it, you can use it in calculations.
+    That's the whole idea.
+</p>
+
+<pre><code><span class="kw">int</span> age = <span class="num">28</span>;           <span class="cmt">// a whole number</span>
+<span class="kw">float</span> pi = <span class="num">3.14159</span>;     <span class="cmt">// a decimal number</span>
+<span class="kw">char</span> letter = <span class="str">'A'</span>;      <span class="cmt">// a single character</span></code></pre>
+
+<p>
+    Three variables, three different types. The <em>type</em> tells the computer what kind of
+    data the box can hold and how much memory to set aside for it. An <code>int</code> takes
+    4 bytes. A <code>char</code> takes 1 byte. A <code>float</code> takes 4 bytes but can
+    store decimals.
+</p>
+
+<p>
+    Types are like labeling your boxes. You wouldn't put soup in a shoebox. You wouldn't store
+    a novel in a thimble. The type tells C what to expect, so it can store the value efficiently
+    and catch mistakes when you try to do something that doesn't make sense.
+</p>
+
+<h2>The Core Types</h2>
+
+<p>
+    C has a small set of built-in types. You'll use these constantly:
+</p>
+
+<ul>
+    <li><code>int</code> — Whole numbers. <code>42</code>, <code>-7</code>, <code>0</code>. Your workhorse type for counting, indexing, and general-purpose integer math.</li>
+    <li><code>float</code> — Decimal numbers. <code>3.14</code>, <code>0.001</code>, <code>-99.5</code>. When you need fractions.</li>
+    <li><code>double</code> — Like <code>float</code> but with more precision (8 bytes instead of 4). Use this when accuracy matters — scientific calculations, graphics math.</li>
+    <li><code>char</code> — A single character. <code>'A'</code>, <code>'z'</code>, <code>'7'</code>. Under the hood it's just a small number (0-255) that maps to a character via ASCII.</li>
+    <li><code>bool</code> — True or false. Yes or no. On or off. You need <code>#include &lt;stdbool.h&gt;</code> to use it, which gives you <code>true</code> and <code>false</code>.</li>
+</ul>
+
+<div class="note">
+    <strong>Why does <code>bool</code> need an include?</strong> Original C (1972) didn't have a boolean
+    type — people just used <code>int</code> and treated <code>0</code> as false and anything else as
+    true. The <code>bool</code> type was added later in C99, so you need the header to access it. Old
+    habits die hard in C.
+</div>
+
+<h2>Declaration vs. Assignment</h2>
+
+<p>
+    You can declare a variable (create the box) and assign it (put something in) separately:
+</p>
+
+<pre><code><span class="kw">int</span> score;           <span class="cmt">// declaration — creates the box (value is garbage!)</span>
+score = <span class="num">100</span>;         <span class="cmt">// assignment — puts 100 in the box</span></code></pre>
+
+<p>
+    Or you can do both at once, which is what most people do:
+</p>
+
+<pre><code><span class="kw">int</span> score = <span class="num">100</span>;     <span class="cmt">// declaration + assignment in one line</span></code></pre>
+
+<div class="warning">
+    <strong>Uninitialized variables are dangerous.</strong> If you declare a variable without assigning
+    a value, it contains whatever random garbage was already in that memory. It could be 0, it could
+    be 847293, it could be anything. Always initialize your variables. This is one of C's classic
+    footguns.
+</div>
+
+<h2>Printing Variables with printf</h2>
+
+<p>
+    <code>printf</code> uses <em>format specifiers</em> — little placeholders that tell it what type
+    of value to print and where to put it. The specifier starts with <code>%</code>:
+</p>
+
+<pre><code><span class="kw">int</span> x = <span class="num">42</span>;
+<span class="kw">float</span> y = <span class="num">3.14</span>;
+<span class="kw">char</span> c = <span class="str">'K'</span>;
+
+<span class="fn">printf</span>(<span class="str">"x is %d\n"</span>, x);       <span class="cmt">// %d for integers</span>
+<span class="fn">printf</span>(<span class="str">"y is %f\n"</span>, y);       <span class="cmt">// %f for floats</span>
+<span class="fn">printf</span>(<span class="str">"c is %c\n"</span>, c);       <span class="cmt">// %c for characters</span>
+<span class="fn">printf</span>(<span class="str">"x=%d, y=%.2f\n"</span>, x, y);  <span class="cmt">// multiple values, .2 = 2 decimal places</span></code></pre>
+
+<p>
+    The <code>%d</code> gets replaced by the value of <code>x</code>. The <code>%f</code> gets
+    replaced by the value of <code>y</code>. You can have as many format specifiers as you want
+    — just make sure you pass the right number of values after the format string, in the right
+    order. If you mix them up, C won't stop you, and you'll get weird results. Ask me how I know.
+</p>
+
+<h2>Constants: Values That Never Change</h2>
+
+<p>
+    Sometimes you have a value that should never be modified. A shadow radius. The value of pi.
+    The maximum number of windows your compositor can track. For these, you use a <em>constant</em>.
+</p>
+
+<p>
+    In C, there are two common ways to make constants. The first is <code>#define</code>, which
+    is a preprocessor directive — it does a find-and-replace across your code before compilation:
+</p>
+
+<pre><code><span class="pp">#define</span> SHADOW_RADIUS  <span class="num">22</span>
+<span class="pp">#define</span> MAX_CLIENTS   <span class="num">256</span></code></pre>
+
+<p>
+    Everywhere the compiler sees <code>SHADOW_RADIUS</code>, it substitutes <code>22</code>. It's
+    like a text macro. The convention is ALL_CAPS for <code>#define</code> constants, so they
+    stand out in your code.
+</p>
+
+<p>
+    The second way is the <code>const</code> keyword:
+</p>
+
+<pre><code><span class="kw">const int</span> max_speed = <span class="num">120</span>;   <span class="cmt">// can't be changed after this line</span></code></pre>
+
+<h2>Crystal's Constants: A Real Example</h2>
+
+<p>
+    Let's look at how Crystal Compositor uses named constants. Here are the shadow
+    parameters from <code>crystal.h</code>:
+</p>
+
+<pre><code><span class="cmt">// Shadow parameters from Crystal Compositor</span>
+
+<span class="pp">#define</span> SHADOW_RADIUS             <span class="num">22</span>
+<span class="pp">#define</span> SHADOW_Y_OFFSET            <span class="num">4</span>
+
+<span class="cmt">// How far the shadow extends past the window on each side</span>
+<span class="pp">#define</span> SHADOW_TOP     (SHADOW_RADIUS - SHADOW_Y_OFFSET)   <span class="cmt">// 18 px</span>
+<span class="pp">#define</span> SHADOW_BOTTOM  (SHADOW_RADIUS + SHADOW_Y_OFFSET)   <span class="cmt">// 26 px</span>
+<span class="pp">#define</span> SHADOW_LEFT     SHADOW_RADIUS                      <span class="cmt">// 22 px</span>
+<span class="pp">#define</span> SHADOW_RIGHT    SHADOW_RADIUS                      <span class="cmt">// 22 px</span>
+
+<span class="cmt">// Shadow opacity: 0.0 = invisible, 1.0 = fully opaque black</span>
+<span class="pp">#define</span> SHADOW_ALPHA_ACTIVE    <span class="num">0.45</span>
+<span class="pp">#define</span> SHADOW_ALPHA_INACTIVE  <span class="num">0.22</span></code></pre>
+
+<p>
+    Look at how readable this is. <code>SHADOW_RADIUS</code> is 22 pixels — that's how far the
+    Gaussian blur spreads. <code>SHADOW_Y_OFFSET</code> is 4 pixels — the shadow shifts down
+    slightly, like light coming from above. It's saying: "whenever I write
+    <code>SHADOW_RADIUS</code>, I mean the number 22."
+</p>
+
+<p>
+    Notice how <code>SHADOW_TOP</code> is defined <em>in terms of</em> the other constants:
+    <code>(SHADOW_RADIUS - SHADOW_Y_OFFSET)</code>. That evaluates to 18. If someone later changes
+    <code>SHADOW_RADIUS</code> from 22 to 30, all the dependent values update automatically.
+    That's the power of named constants — change one number and everything stays consistent.
+</p>
+
+<p>
+    And look at the alpha values: the focused window gets <code>0.45</code> opacity (a strong,
+    prominent shadow) while inactive windows get <code>0.22</code> (softer, so they recede visually).
+    These numbers were probably tweaked dozens of times until the shadows looked just right. Having
+    them as named constants makes that iteration painless — you change one number, recompile, and see
+    the result.
+</p>
+
+<p>
+    The window manager also defines its maximum capacity this way:
+</p>
+
+<pre><code><span class="pp">#define</span> MAX_CLIENTS  <span class="num">256</span>    <span class="cmt">// Maximum number of managed windows</span></code></pre>
+
+<p>
+    256 windows. That's the limit. If you tried to open a 257th, the window manager wouldn't
+    track it. (That's a simplification — in practice, who has 256 windows open? If you do,
+    you have bigger problems than your window manager.)
+</p>
+
+<h2>Variables Can Change</h2>
+
+<p>
+    Unlike constants, regular variables can be updated. That's kind of the point:
+</p>
+
+<pre><code><span class="kw">int</span> score = <span class="num">0</span>;
+<span class="fn">printf</span>(<span class="str">"Score: %d\n"</span>, score);   <span class="cmt">// Score: 0</span>
+
+score = score + <span class="num">10</span>;
+<span class="fn">printf</span>(<span class="str">"Score: %d\n"</span>, score);   <span class="cmt">// Score: 10</span>
+
+score += <span class="num">5</span>;                      <span class="cmt">// shorthand for score = score + 5</span>
+<span class="fn">printf</span>(<span class="str">"Score: %d\n"</span>, score);   <span class="cmt">// Score: 15</span></code></pre>
+
+<p>
+    The <code>+=</code> operator is shorthand that saves you from typing the variable name twice.
+    C also has <code>-=</code>, <code>*=</code>, <code>/=</code>, and a few others. They all
+    work the same way: take the current value, do the operation, store the result back.
+</p>
+
+<div class="try-it">
+    <h3>Try It Yourself</h3>
+    <p>Write a program that:</p>
+    <ol>
+        <li>Declares an <code>int</code> for your birth year.</li>
+        <li>Declares an <code>int</code> for the current year (2026).</li>
+        <li>Calculates and prints your age.</li>
+        <li>Declares a <code>float</code> for your height in meters and prints it with 2 decimal places.</li>
+        <li>Defines a <code>#define</code> constant for the maximum age a human can reach, and prints it.</li>
+    </ol>
+    <p>Hint: <code>printf("Age: %d\n", current_year - birth_year);</code></p>
+</div>
+
+<div class="resources">
+    <h3>Further Reading</h3>
+    <ul>
+        <li><strong>Books:</strong> K&amp;R Chapter 2 — Types, Operators, and Expressions.</li>
+        <li><strong>Books:</strong> <em>Absolute Beginner's Guide</em>, Chapters 3-5.</li>
+        <li><strong>Online:</strong> <a href="https://beej.us/guide/bgc/html/split/variables-and-statements.html">Beej's Guide: Variables and Statements</a></li>
+        <li><strong>Reference:</strong> <a href="https://en.cppreference.com/w/c/language/type">C Type Reference (cppreference.com)</a></li>
+    </ul>
+</div>
+
+<div class="chapter-nav">
+    <a href="02-hello-world.html">&larr; Chapter 2: Your First Program</a>
+    <a href="../index.html">Home</a>
+    <a href="04-functions.html">Chapter 4: Functions &rarr;</a>
+</div>
+
+</body>
+</html>

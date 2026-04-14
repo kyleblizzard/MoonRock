@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chapter 9: Header Files — Learning C by Building a Compositor</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<h1>Chapter 9: Header Files — Sharing Your Code's Menu</h1>
+
+<h2>The Problem</h2>
+
+<p>
+    Your program is growing. You've got functions in one file that need to call functions in
+    another file. But C compiles each <code>.c</code> file separately. When the compiler is
+    working on <code>main.c</code>, it has no idea what functions exist in <code>crystal.c</code>.
+    If you write <code>crystal_init(&amp;wm)</code> in <code>main.c</code>, the compiler says:
+    "I have no idea what <code>crystal_init</code> is. I've never heard of it. Refuse to compile."
+</p>
+
+<p>
+    Fair enough. The compiler needs to know what the function looks like — its name, its
+    parameters, its return type — before it can call it. That's where header files come in.
+</p>
+
+<h2>Headers: The Menu, Not the Kitchen</h2>
+
+<p>
+    A header file (<code>.h</code>) is like a restaurant menu. It tells you what's available
+    and what each item looks like, but it doesn't contain the recipes. The recipes live in the
+    <code>.c</code> files.
+</p>
+
+<pre><code><span class="cmt">// crystal.h — the "menu"</span>
+<span class="kw">bool</span> <span class="fn">crystal_init</span>(<span class="type">AuraWM</span> *wm);
+<span class="kw">void</span> <span class="fn">crystal_shutdown</span>(<span class="type">AuraWM</span> *wm);
+<span class="kw">void</span> <span class="fn">crystal_composite</span>(<span class="type">AuraWM</span> *wm);</code></pre>
+
+<pre><code><span class="cmt">// crystal.c — the "kitchen"</span>
+<span class="kw">bool</span> <span class="fn">crystal_init</span>(<span class="type">AuraWM</span> *wm)
+{
+    <span class="cmt">// 200+ lines of actual initialization code</span>
+    <span class="cmt">// ...</span>
+}</code></pre>
+
+<p>
+    When <code>main.c</code> says <code>#include "crystal.h"</code>, the preprocessor literally
+    copies the contents of <code>crystal.h</code> into <code>main.c</code> before compilation.
+    Now the compiler knows what <code>crystal_init</code> looks like and can verify you're calling
+    it correctly. The actual code (the "recipe") gets linked in later, during the linking step.
+</p>
+
+<h2>crystal.h: A Real Header</h2>
+
+<p>
+    Here's the structure of Crystal Compositor's actual header file:
+</p>
+
+<pre><code><span class="pp">#ifndef</span> AURA_CRYSTAL_H
+<span class="pp">#define</span> AURA_CRYSTAL_H
+
+<span class="pp">#include</span> <span class="str">"wm.h"</span>
+<span class="pp">#include</span> <span class="str">&lt;stdbool.h&gt;</span>
+
+<span class="cmt">// Shadow parameters</span>
+<span class="pp">#define</span> SHADOW_RADIUS       <span class="num">22</span>
+<span class="pp">#define</span> SHADOW_Y_OFFSET      <span class="num">4</span>
+<span class="pp">#define</span> SHADOW_ALPHA_ACTIVE  <span class="num">0.45</span>
+
+<span class="cmt">// Public functions — the things other files can call</span>
+<span class="kw">bool</span> <span class="fn">crystal_init</span>(<span class="type">AuraWM</span> *wm);
+<span class="kw">void</span> <span class="fn">crystal_shutdown</span>(<span class="type">AuraWM</span> *wm);
+<span class="kw">void</span> <span class="fn">crystal_composite</span>(<span class="type">AuraWM</span> *wm);
+<span class="kw">void</span> <span class="fn">crystal_window_mapped</span>(<span class="type">AuraWM</span> *wm, <span class="type">Client</span> *c);
+<span class="kw">void</span> <span class="fn">crystal_window_unmapped</span>(<span class="type">AuraWM</span> *wm, <span class="type">Client</span> *c);
+<span class="kw">void</span> <span class="fn">crystal_window_damaged</span>(<span class="type">AuraWM</span> *wm, <span class="type">Client</span> *c);
+<span class="kw">bool</span> <span class="fn">crystal_is_active</span>(<span class="kw">void</span>);
+
+<span class="pp">#endif</span> <span class="cmt">// AURA_CRYSTAL_H</span></code></pre>
+
+<p>
+    Let's break down the parts:
+</p>
+
+<h3>Include Guards</h3>
+
+<pre><code><span class="pp">#ifndef</span> AURA_CRYSTAL_H
+<span class="pp">#define</span> AURA_CRYSTAL_H
+<span class="cmt">// ... everything in between ...</span>
+<span class="pp">#endif</span></code></pre>
+
+<p>
+    These three lines are an <em>include guard</em>. They prevent the header from being included
+    twice in the same file. Here's why that matters: imagine <code>events.c</code> includes both
+    <code>crystal.h</code> and <code>wm.h</code>, and <code>crystal.h</code> also includes
+    <code>wm.h</code>. Without the guard, <code>wm.h</code> gets pasted in twice, causing
+    "duplicate definition" errors. The guard says: "If <code>AURA_CRYSTAL_H</code> hasn't been
+    defined yet, define it and include everything. If it's already defined, skip the whole file."
+    Problem solved.
+</p>
+
+<p>
+    Every header file you write should have an include guard. The convention is to use the
+    filename in all caps with underscores: <code>MY_FILE_H</code>.
+</p>
+
+<h3>Angle Brackets vs. Quotes</h3>
+
+<pre><code><span class="pp">#include</span> <span class="str">&lt;stdbool.h&gt;</span>    <span class="cmt">// system header — search system directories</span>
+<span class="pp">#include</span> <span class="str">"wm.h"</span>          <span class="cmt">// project header — search current directory first</span></code></pre>
+
+<p>
+    Angle brackets (<code>&lt; &gt;</code>) tell the preprocessor to look in the system include
+    directories — that's where standard library headers and installed library headers live.
+    Double quotes (<code>" "</code>) tell it to look in the current directory first, then fall
+    back to system directories. Use quotes for your own headers, angle brackets for everything
+    else.
+</p>
+
+<h3>What Goes in a Header</h3>
+
+<ul>
+    <li><strong>Function declarations</strong> (prototypes) — the name, parameters, and return type.</li>
+    <li><strong>Struct definitions</strong> — so other files can use your types.</li>
+    <li><strong>#define constants</strong> — like <code>SHADOW_RADIUS</code>.</li>
+    <li><strong>Type aliases</strong> — <code>typedef</code> declarations.</li>
+</ul>
+
+<p>
+    What does NOT go in a header: function bodies (implementations), variable definitions
+    (unless <code>extern</code>), or anything that produces actual code. Headers are declarations.
+    Source files are definitions.
+</p>
+
+<h2>How Files Talk to Each Other</h2>
+
+<p>
+    The AuraOS window manager has about a dozen source files. Here's how they connect:
+</p>
+
+<pre><code><span class="cmt">// main.c includes headers for every module it uses</span>
+<span class="pp">#include</span> <span class="str">"wm.h"</span>
+<span class="pp">#include</span> <span class="str">"events.h"</span>
+<span class="pp">#include</span> <span class="str">"crystal.h"</span>
+
+<span class="cmt">// Now main.c can call functions from any of those modules</span>
+<span class="fn">wm_init</span>(&amp;wm);
+<span class="fn">crystal_init</span>(&amp;wm);
+<span class="fn">events_run</span>(&amp;wm);</code></pre>
+
+<p>
+    Each <code>.c</code> file is its own world. It doesn't know about any other file unless
+    it explicitly includes that file's header. This is how C programs stay organized as they
+    grow — each module has a clean public interface (the header) and a private implementation
+    (the source file). Everything that's <code>static</code> in a <code>.c</code> file is
+    completely invisible to other files.
+</p>
+
+<div class="note">
+    <strong>This is C's version of encapsulation.</strong> Languages like Java have
+    <code>public</code> and <code>private</code> keywords. C has a simpler system: if it's in
+    the header, it's public. If it's <code>static</code> in the source file, it's private.
+    Crystal has dozens of <code>static</code> helper functions that only <code>crystal.c</code>
+    can see — like <code>static void generate_shadow_texture()</code>. That's internal-only code
+    that other modules have no business calling.
+</div>
+
+<div class="try-it">
+    <h3>Try It Yourself</h3>
+    <ol>
+        <li>
+            Create a simple math library: <code>mymath.h</code> with declarations for
+            <code>int add(int a, int b)</code> and <code>int multiply(int a, int b)</code>.
+            Then <code>mymath.c</code> with the implementations. Then <code>main.c</code> that
+            includes <code>mymath.h</code> and uses both functions.
+        </li>
+        <li>
+            Compile them together: <code>gcc main.c mymath.c -o mathtest</code>
+        </li>
+        <li>
+            Add include guards to <code>mymath.h</code>. Try including the header twice in
+            <code>main.c</code> — the guard should prevent duplicate definition errors.
+        </li>
+    </ol>
+</div>
+
+<div class="resources">
+    <h3>Further Reading</h3>
+    <ul>
+        <li><strong>Books:</strong> K&amp;R Chapter 4.5 — Header Files.</li>
+        <li><strong>Books:</strong> <em>Absolute Beginner's Guide</em>, Chapter 33 (Working with Multiple Source Files).</li>
+        <li><strong>Online:</strong> <a href="https://beej.us/guide/bgc/html/split/multifile-projects.html">Beej's Guide: Multifile Projects</a></li>
+    </ul>
+</div>
+
+<div class="chapter-nav">
+    <a href="08-arrays-memory.html">&larr; Chapter 8: Arrays &amp; Memory</a>
+    <a href="../index.html">Home</a>
+    <a href="10-libraries.html">Chapter 10: Libraries &rarr;</a>
+</div>
+
+</body>
+</html>

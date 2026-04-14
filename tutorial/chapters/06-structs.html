@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chapter 6: Structs — Learning C by Building a Compositor</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<h1>Chapter 6: Structs — Building Your Own Types</h1>
+
+<h2>When One Variable Isn't Enough</h2>
+
+<p>
+    Let's say you're writing a program that deals with points on a screen. A point has an X
+    coordinate and a Y coordinate. You could use two separate variables:
+</p>
+
+<pre><code><span class="kw">int</span> point_x = <span class="num">100</span>;
+<span class="kw">int</span> point_y = <span class="num">200</span>;</code></pre>
+
+<p>
+    That works for one point. But what about ten points? Twenty? Now you need <code>point1_x</code>,
+    <code>point1_y</code>, <code>point2_x</code>, <code>point2_y</code>... it gets ugly fast. And
+    if you want to pass a point to a function, you have to pass two separate arguments every time.
+    It's clumsy. It doesn't scale.
+</p>
+
+<p>
+    What you really want is to say: "A point IS an x and a y, bundled together as one thing."
+    That's exactly what a struct does.
+</p>
+
+<h2>Your First Struct</h2>
+
+<pre><code><span class="kw">struct</span> <span class="type">Point</span> {
+    <span class="kw">int</span> x;
+    <span class="kw">int</span> y;
+};</code></pre>
+
+<p>
+    You just created a new type. <code>struct Point</code> is now a type, just like <code>int</code>
+    or <code>float</code>. It contains two integers: <code>x</code> and <code>y</code>. The
+    individual pieces inside are called <em>fields</em> or <em>members</em>.
+</p>
+
+<p>
+    To use it:
+</p>
+
+<pre><code><span class="kw">struct</span> <span class="type">Point</span> cursor;
+cursor.x = <span class="num">100</span>;
+cursor.y = <span class="num">200</span>;
+
+<span class="fn">printf</span>(<span class="str">"Cursor at (%d, %d)\n"</span>, cursor.x, cursor.y);</code></pre>
+
+<p>
+    The dot (<code>.</code>) is how you access a field inside a struct. <code>cursor.x</code>
+    means "the x field of the cursor variable." It reads naturally — almost like English.
+</p>
+
+<p>
+    You can also initialize a struct all at once:
+</p>
+
+<pre><code><span class="kw">struct</span> <span class="type">Point</span> cursor = { <span class="num">100</span>, <span class="num">200</span> };   <span class="cmt">// x = 100, y = 200</span></code></pre>
+
+<p>
+    This is the moment where C stops feeling like math homework and starts feeling like
+    building something. Structs let you model the world. A window has a position, a size, a
+    title. A player has health, a name, a score. A pixel has red, green, blue values. You
+    define the shape of your data, and then you work with it as a single, coherent unit.
+</p>
+
+<h2>Crystal's WindowTexture: A Real Struct</h2>
+
+<p>
+    Here's an actual struct from Crystal Compositor. This is how Crystal tracks each window
+    that's being composited on screen:
+</p>
+
+<pre><code><span class="kw">struct</span> <span class="type">WindowTexture</span> {
+    <span class="type">Window</span>  xwin;        <span class="cmt">// The X11 window ID</span>
+    <span class="type">Pixmap</span>  pixmap;      <span class="cmt">// Off-screen image from XComposite</span>
+    <span class="type">GLuint</span>  texture;     <span class="cmt">// OpenGL texture handle (GPU-side)</span>
+    <span class="type">Damage</span>  damage;      <span class="cmt">// Notifies us when contents change</span>
+    <span class="kw">int</span>     x, y, w, h; <span class="cmt">// Position and size on screen</span>
+    <span class="kw">bool</span>    dirty;       <span class="cmt">// Needs its texture refreshed?</span>
+    <span class="kw">bool</span>    has_alpha;   <span class="cmt">// Does this window have transparency?</span>
+    <span class="kw">bool</span>    bound;       <span class="cmt">// Is the texture currently bound?</span>
+    <span class="type">GLuint</span>  shadow_tex;  <span class="cmt">// Pre-computed shadow texture</span>
+    <span class="kw">int</span>     shadow_tex_w, shadow_tex_h;  <span class="cmt">// Shadow dimensions</span>
+};</code></pre>
+
+<p>
+    Look at all the data bundled together. A window on your screen isn't just one thing — it
+    has a position (<code>x, y</code>), a size (<code>w, h</code>), a GPU texture for its
+    contents, a shadow texture, flags for whether it's transparent or needs updating... All
+    of this lives together in one struct because it all describes the same window.
+</p>
+
+<p>
+    Without structs, you'd need separate arrays for each piece of data:
+    <code>window_x[256]</code>, <code>window_y[256]</code>, <code>window_w[256]</code>,
+    <code>window_h[256]</code>, <code>window_dirty[256]</code>... Nightmare fuel. With a struct,
+    it's clean:
+</p>
+
+<pre><code><span class="kw">struct</span> <span class="type">WindowTexture</span> windows[<span class="num">256</span>];</code></pre>
+
+<p>
+    One line. An array of 256 window textures. Each one is a complete package of everything
+    Crystal needs to know about that window. To access the width of window number 5:
+</p>
+
+<pre><code><span class="kw">int</span> width = windows[<span class="num">5</span>].w;</code></pre>
+
+<p>
+    Simple. Readable. Correct.
+</p>
+
+<h2>Crystal's Client Struct: Modeling a Managed Window</h2>
+
+<p>
+    The window manager has its own struct for tracking windows, separate from Crystal's:
+</p>
+
+<pre><code><span class="kw">struct</span> <span class="type">Client</span> {
+    <span class="type">Window</span> client;       <span class="cmt">// The application's actual window</span>
+    <span class="type">Window</span> frame;        <span class="cmt">// Our frame window (wraps the client)</span>
+    <span class="kw">int</span>    x, y;         <span class="cmt">// Frame position on screen</span>
+    <span class="kw">int</span>    w, h;         <span class="cmt">// Client content size</span>
+    <span class="kw">bool</span>   mapped;       <span class="cmt">// Is this window visible?</span>
+    <span class="kw">bool</span>   focused;      <span class="cmt">// Is this the active window?</span>
+    <span class="kw">char</span>   title[<span class="num">256</span>];   <span class="cmt">// Window title text</span>
+    <span class="kw">bool</span>   zoomed;       <span class="cmt">// Is this window maximized?</span>
+    <span class="kw">int</span>    saved_x, saved_y, saved_w, saved_h;  <span class="cmt">// Pre-zoom size</span>
+};</code></pre>
+
+<p>
+    Every window you see on your desktop has a <code>Client</code> struct behind it. When you
+    click a window to focus it, the window manager sets <code>c->focused = true</code>. When you
+    drag a window, it updates <code>c->x</code> and <code>c->y</code>. When you maximize a
+    window, it saves the current size into <code>saved_x/y/w/h</code>, sets <code>zoomed = true</code>,
+    and resizes the window to fill the screen. When you un-maximize, it reads those saved values
+    back.
+</p>
+
+<p>
+    Notice <code>char title[256]</code> — that's a character array (a string) embedded right inside
+    the struct. It can hold up to 255 characters of window title text (plus a null terminator, which
+    we'll talk about when we cover strings). The title "Firefox" sits right there in the struct,
+    alongside the position and size data.
+</p>
+
+<h2>The Global State: Struct of Structs</h2>
+
+<p>
+    Here's where it gets really satisfying. The window manager's entire state is one big struct:
+</p>
+
+<pre><code><span class="kw">struct</span> <span class="type">AuraWM</span> {
+    <span class="type">Display</span> *dpy;           <span class="cmt">// Connection to the X server</span>
+    <span class="kw">int</span>      screen;         <span class="cmt">// Which screen we're on</span>
+    <span class="type">Window</span>   root;           <span class="cmt">// The root (desktop) window</span>
+    <span class="kw">int</span>      root_w, root_h; <span class="cmt">// Screen dimensions</span>
+
+    <span class="type">Client</span>   clients[<span class="num">256</span>];   <span class="cmt">// All managed windows</span>
+    <span class="kw">int</span>      num_clients;    <span class="cmt">// How many windows we're tracking</span>
+    <span class="type">Client</span>  *focused;        <span class="cmt">// Currently focused window</span>
+
+    <span class="kw">bool</span>     running;        <span class="cmt">// Is the WM still running?</span>
+    <span class="kw">bool</span>     dragging;       <span class="cmt">// Is the user dragging a window?</span>
+    <span class="type">Client</span>  *drag_client;    <span class="cmt">// Which window is being dragged</span>
+};</code></pre>
+
+<p>
+    See that? <code>clients[256]</code> — an array of 256 <code>Client</code> structs. A struct
+    inside a struct. The <code>AuraWM</code> struct contains everything: the display connection,
+    the list of windows, the current focus state, drag state... the entire window manager's
+    brain, in one variable.
+</p>
+
+<p>
+    In <code>main()</code>, this entire world is created with one line:
+</p>
+
+<pre><code><span class="kw">static</span> <span class="type">AuraWM</span> wm;</code></pre>
+
+<p>
+    One variable. It holds everything. And then every function that needs access to the window
+    manager's state receives a pointer to this struct: <code>crystal_init(&amp;wm)</code>,
+    <code>events_run(&amp;wm)</code>, <code>wm_shutdown(&amp;wm)</code>. That's how state flows
+    through a C program — you create it in one place and pass references to it everywhere else.
+</p>
+
+<div class="tip">
+    <strong>Structs are how C programmers think about design.</strong> Before writing any code,
+    experienced C programmers ask: "What data do I need? What belongs together?" They design
+    their structs first, then write functions that operate on them. The struct <em>is</em> the
+    design. If your structs make sense, the code practically writes itself.
+</div>
+
+<h2>Structs and Functions</h2>
+
+<p>
+    Structs and functions go hand in hand. You define a struct to represent something, then
+    write functions that operate on it. Here's a small self-contained example:
+</p>
+
+<pre><code><span class="pp">#include</span> <span class="str">&lt;stdio.h&gt;</span>
+<span class="pp">#include</span> <span class="str">&lt;math.h&gt;</span>
+
+<span class="kw">struct</span> <span class="type">Point</span> {
+    <span class="kw">float</span> x;
+    <span class="kw">float</span> y;
+};
+
+<span class="cmt">// Calculate the distance between two points</span>
+<span class="kw">float</span> <span class="fn">distance</span>(<span class="kw">struct</span> <span class="type">Point</span> a, <span class="kw">struct</span> <span class="type">Point</span> b)
+{
+    <span class="kw">float</span> dx = b.x - a.x;
+    <span class="kw">float</span> dy = b.y - a.y;
+    <span class="kw">return</span> <span class="fn">sqrt</span>(dx * dx + dy * dy);
+}
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">void</span>)
+{
+    <span class="kw">struct</span> <span class="type">Point</span> origin = { <span class="num">0.0</span>, <span class="num">0.0</span> };
+    <span class="kw">struct</span> <span class="type">Point</span> target = { <span class="num">3.0</span>, <span class="num">4.0</span> };
+
+    <span class="fn">printf</span>(<span class="str">"Distance: %.2f\n"</span>, <span class="fn">distance</span>(origin, target));  <span class="cmt">// 5.00</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+<p>
+    The <code>distance</code> function takes two <code>Point</code> structs and returns the
+    distance between them. Clean, readable, reusable. You could call this function a thousand
+    times with different points and it would just work.
+</p>
+
+<div class="note">
+    <strong>typedef shortcut:</strong> Tired of typing <code>struct Point</code> everywhere?
+    C has a keyword called <code>typedef</code> that creates an alias:
+    <br><br>
+    <code>typedef struct { int x, y; } Point;</code>
+    <br><br>
+    Now you can just write <code>Point p;</code> instead of <code>struct Point p;</code>.
+    Crystal's code uses <code>typedef</code> for <code>AuraWM</code> and <code>Client</code>,
+    which is why you see <code>AuraWM *wm</code> instead of <code>struct AuraWM *wm</code>
+    in function signatures.
+</div>
+
+<h2>What's Next</h2>
+
+<p>
+    You've now got the core building blocks: variables to hold data, functions to organize
+    behavior, control flow to make decisions, and structs to model complex things. These four
+    concepts are the foundation of everything in C.
+</p>
+
+<p>
+    In the next set of chapters, we'll tackle the topics that separate C from friendlier
+    languages: pointers, memory management, arrays, and strings. That's where C gets its
+    reputation — and where it gets its power. You'll understand what that <code>*</code> means
+    in <code>AuraWM *wm</code>, why we pass <code>&amp;wm</code> to functions, and how Crystal
+    manages to track 256 windows worth of GPU textures without breaking a sweat.
+</p>
+
+<p>
+    But for now, take a breath. You know more C than you think. Go back and look at Crystal's
+    <code>main()</code> from Chapter 2. I bet it makes a lot more sense now than it did then.
+</p>
+
+<div class="try-it">
+    <h3>Try It Yourself</h3>
+    <ol>
+        <li>
+            Define a <code>struct Rectangle</code> with fields <code>x</code>, <code>y</code>,
+            <code>width</code>, and <code>height</code>. Write a function <code>int area(struct Rectangle r)</code>
+            that returns the area. Write another function <code>void print_rect(struct Rectangle r)</code>
+            that prints it nicely.
+        </li>
+        <li>
+            Define a <code>struct Student</code> with <code>name</code> (char array),
+            <code>age</code> (int), and <code>gpa</code> (float). Create an array of 3 students,
+            fill in their data, and print each one.
+        </li>
+        <li>
+            <strong>Challenge:</strong> Define a <code>struct Color</code> with <code>r</code>,
+            <code>g</code>, <code>b</code> (all floats, 0.0 to 1.0). Write a function that
+            takes two Colors and returns a new Color that's the average (mix) of them. This is
+            actually similar to how alpha blending works in Crystal!
+        </li>
+    </ol>
+</div>
+
+<div class="resources">
+    <h3>Further Reading</h3>
+    <ul>
+        <li><strong>Books:</strong> K&amp;R Chapter 6 — Structures. The definitive treatment.</li>
+        <li><strong>Books:</strong> <em>Absolute Beginner's Guide</em>, Chapter 24 (Structures).</li>
+        <li><strong>Online:</strong> <a href="https://beej.us/guide/bgc/html/split/structs.html">Beej's Guide: Structs</a></li>
+        <li><strong>Online:</strong> <a href="https://cs50.harvard.edu/x/">CS50</a> — Week 3-4 covers structs and memory in great detail.</li>
+    </ul>
+</div>
+
+<div class="chapter-nav">
+    <a href="05-control-flow.html">&larr; Chapter 5: Control Flow</a>
+    <a href="../index.html">Home</a>
+    <a href="07-pointers.html">Chapter 7: Pointers &rarr;</a>
+</div>
+
+</body>
+</html>

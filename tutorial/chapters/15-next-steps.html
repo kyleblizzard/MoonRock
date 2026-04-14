@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chapter 15: Next Steps — Learning C by Building a Compositor</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<h1>Chapter 15: Next Steps</h1>
+<p class="subtitle">Where to go from here — you're not a beginner anymore</p>
+
+<p>
+You've made it. Fourteen chapters of C, from "what is a variable" to building
+algorithms that blur pixels on a GPU. You've seen real code from a real compositor
+that renders a real desktop. That's not nothing. That's actually a lot.
+</p>
+
+<p>
+So where do you go from here? The honest answer is: wherever you want. But here
+are the paths I'd recommend, in order of "things that will make you dangerous."
+</p>
+
+<h2>Read These Books</h2>
+
+<p>
+You already own two of the best C books ever written. Now's the time to actually
+read them cover to cover:
+</p>
+
+<ul>
+    <li>
+        <strong>"The C Programming Language" by Kernighan &amp; Ritchie</strong> — The original.
+        Written by the people who invented C. It's short, precise, and every sentence
+        matters. Read chapters 1-6 carefully. Do the exercises. When you finish this
+        book, you'll understand C better than most professional programmers.
+    </li>
+    <li>
+        <strong>"Absolute Beginner's Guide to C" by Greg Perry</strong> — You've already
+        gone past "absolute beginner," but go back and read the chapters on file I/O,
+        string manipulation, and the standard library. These are the practical tools
+        you'll use every day.
+    </li>
+</ul>
+
+<h2>Take These Free Courses</h2>
+
+<ul>
+    <li>
+        <a href="https://cs50.harvard.edu/x/">CS50 (Harvard)</a> — The most popular
+        intro CS course in the world. Free. Starts with Scratch, moves to C, then
+        Python. The C weeks are gold. David Malan is an incredible teacher.
+    </li>
+    <li>
+        <a href="https://beej.us/guide/bgc/">Beej's Guide to C Programming</a> —
+        Free online book. More modern than K&amp;R, covers C11/C17 features. Great
+        reference when you forget how something works.
+    </li>
+    <li>
+        <a href="https://www.learn-c.org/">learn-c.org</a> — Interactive C tutorials
+        in your browser. Good for practice when you don't want to set up a compiler.
+    </li>
+</ul>
+
+<h2>Watch These People</h2>
+
+<ul>
+    <li>
+        <strong>Casey Muratori — Handmade Hero</strong>
+        (<a href="https://handmadehero.org/">handmadehero.org</a>) —
+        A professional game developer builds an entire game engine from scratch in C,
+        on camera, explaining everything. Hundreds of episodes. This is the closest
+        thing to an apprenticeship you'll find for free. Warning: you will learn so
+        much it might ruin you for frameworks forever.
+    </li>
+    <li>
+        <strong>Tsoding Daily</strong> (YouTube) — Entertaining, fast-paced C and
+        systems programming. Builds things from scratch. Good energy. You'll learn
+        things you didn't know you needed to know.
+    </li>
+    <li>
+        <strong>Ben Eater</strong> (YouTube) — Builds a computer from logic gates.
+        Doesn't teach C directly, but understanding what the hardware is actually
+        doing beneath your code changes how you think about programming forever.
+    </li>
+</ul>
+
+<h2>Build Something</h2>
+
+<p>
+The single most important thing you can do now is <em>build something you care about</em>.
+Not a tutorial project. Not someone else's exercise. Something YOU want to exist.
+</p>
+
+<p>
+Ideas, in order of difficulty:
+</p>
+
+<ol>
+    <li><strong>A text file search tool</strong> — like a mini <code>grep</code>. Read files, search for patterns, print matches.</li>
+    <li><strong>A simple HTTP server</strong> — serve static files over TCP sockets. You'll learn networking and the HTTP protocol.</li>
+    <li><strong>A terminal text editor</strong> — handle keyboard input, render text to the terminal, implement basic editing. Start with <a href="https://viewsourcecode.org/snaptoken/kilo/">kilo</a> as a reference.</li>
+    <li><strong>A chip-8 emulator</strong> — emulate a simple CPU. You'll learn bitwise operations, memory mapping, and how computers actually execute instructions.</li>
+    <li><strong>Contribute to AuraOS</strong> — you've been reading Crystal Compositor's code for 15 chapters. You understand the structs, the event loop, the shader pipeline. Open an issue. Fix a bug. Add a feature. The codebase is yours to explore.</li>
+</ol>
+
+<h2>Tools to Install</h2>
+
+<ul>
+    <li><strong>valgrind</strong> — finds memory leaks and buffer overflows. Run your programs through it regularly.</li>
+    <li><strong>gdb</strong> — the GNU debugger. Learn the basics: <code>break</code>, <code>run</code>, <code>print</code>, <code>backtrace</code>. It will save you hours.</li>
+    <li><strong>AddressSanitizer</strong> — compile with <code>-fsanitize=address</code> and it catches memory errors at runtime. Easier than valgrind for quick checks.</li>
+    <li><a href="https://godbolt.org/">Compiler Explorer</a> — paste your C code, see the assembly output. Understanding what the compiler does with your code is a superpower.</li>
+</ul>
+
+<h2>Reference Sites</h2>
+
+<ul>
+    <li><a href="https://en.cppreference.com/w/c">cppreference.com/w/c</a> — the definitive C standard library reference</li>
+    <li><a href="https://cdecl.org/">cdecl.org</a> — paste a confusing C declaration, get a plain English explanation</li>
+    <li><a href="https://man7.org/linux/man-pages/">man7.org</a> — Linux man pages online (system calls, library functions)</li>
+</ul>
+
+<h2>One Last Thing</h2>
+
+<p>
+C is not a language you "learn" and then you're done. It's a language you grow into.
+Every year you write C, you'll understand it a little deeper. You'll write fewer bugs.
+You'll see patterns you didn't see before. You'll read code that seemed impossible
+six months ago and think "oh, that's actually elegant."
+</p>
+
+<p>
+The Crystal Compositor you've been studying throughout this tutorial is 11,000+ lines
+of C. It manages OpenGL contexts, X11 windows, shader programs, animation state
+machines, touch input, display rotation, and plugin systems. Every line was written
+by someone who started exactly where you are now — staring at a blinking cursor,
+wondering what <code>#include &lt;stdio.h&gt;</code> means.
+</p>
+
+<p>
+Now you know. Go build something.
+</p>
+
+<div class="chapter-nav">
+    <a href="14-advanced.html">&larr; Previous: Advanced Topics</a>
+    <a href="../index.html">Home</a>
+    <span>The End</span>
+</div>
+
+</body>
+</html>
