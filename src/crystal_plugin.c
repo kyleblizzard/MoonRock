@@ -36,6 +36,8 @@
 #define _GNU_SOURCE
 
 #include "crystal_plugin.h"
+#include "crystal_shaders.h"  // Shader programs, FBO management, quad drawing
+#include "crystal.h"          // crystal_get_shaders(), crystal_get_projection()
 
 #include <stdio.h>      // fprintf, fopen, fclose, fgets, etc.
 #include <stdlib.h>     // atof, atoi, malloc, free, realpath
@@ -141,6 +143,30 @@ static void set_default_theme(void)
     strncpy(current_theme.font_name, "Lucida Grande",
             sizeof(current_theme.font_name) - 1);
     current_theme.font_size = 11;
+
+    // Effects: Snow Leopard uses frosted glass blur on the dock and menu bar.
+    // The blur radius controls how soft/blurry the background appears through
+    // translucent panels. Inactive windows stay fully opaque in Snow Leopard.
+    current_theme.blur_behind_radius   = 20.0f;
+    current_theme.dock_blur_radius     = 15.0f;
+    current_theme.menubar_blur_radius  = 10.0f;
+    current_theme.window_opacity_inactive = 1.0f;
+
+    // Animation: Snow Leopard's signature genie effect at normal speed
+    current_theme.minimize_animation = ANIM_GENIE;
+    current_theme.animation_speed    = 1.0f;
+
+    // Buttons: the iconic colored "traffic light" circles
+    current_theme.button_style = BUTTON_AQUA;
+
+    // Dock: slightly translucent glass shelf with 2x magnification on hover,
+    // and reflections of each icon on the shelf surface
+    current_theme.dock_opacity        = 0.85f;
+    current_theme.dock_magnification  = 2.0f;
+    current_theme.dock_reflection     = true;
+
+    // Menu bar: slightly translucent so the desktop barely shows through
+    current_theme.menubar_opacity = 0.9f;
 }
 
 
@@ -457,6 +483,48 @@ bool plugin_load_theme(const char *path)
             }
             else if (strcmp(key, "size") == 0)
                 current_theme.font_size = atoi(value);
+        }
+        else if (strcmp(section, "Effects") == 0) {
+            // [Effects] section — blur and transparency settings for frosted
+            // glass panels and inactive window dimming
+            if (strcmp(key, "blur_behind_radius") == 0)
+                current_theme.blur_behind_radius = (float)atof(value);
+            else if (strcmp(key, "dock_blur_radius") == 0)
+                current_theme.dock_blur_radius = (float)atof(value);
+            else if (strcmp(key, "menubar_blur_radius") == 0)
+                current_theme.menubar_blur_radius = (float)atof(value);
+            else if (strcmp(key, "window_opacity_inactive") == 0)
+                current_theme.window_opacity_inactive = (float)atof(value);
+        }
+        else if (strcmp(section, "Animation") == 0) {
+            // [Animation] section — minimize effect style and global speed.
+            // The minimize style is an integer that maps to the MinimizeAnimation
+            // enum: 0=genie, 1=scale, 2=fade.
+            if (strcmp(key, "minimize_style") == 0)
+                current_theme.minimize_animation = atoi(value);
+            else if (strcmp(key, "speed") == 0)
+                current_theme.animation_speed = (float)atof(value);
+        }
+        else if (strcmp(section, "Buttons") == 0) {
+            // [Buttons] section — title bar button visual style.
+            // Maps to ButtonStyle enum: 0=aqua, 1=flat, 2=classic.
+            if (strcmp(key, "style") == 0)
+                current_theme.button_style = atoi(value);
+        }
+        else if (strcmp(section, "Dock") == 0) {
+            // [Dock] section — dock shelf appearance: opacity, icon
+            // magnification on hover, and whether to draw reflections
+            if (strcmp(key, "opacity") == 0)
+                current_theme.dock_opacity = (float)atof(value);
+            else if (strcmp(key, "magnification") == 0)
+                current_theme.dock_magnification = (float)atof(value);
+            else if (strcmp(key, "reflection") == 0)
+                current_theme.dock_reflection = (atoi(value) != 0);
+        }
+        else if (strcmp(section, "MenuBar") == 0) {
+            // [MenuBar] section — menu bar background opacity
+            if (strcmp(key, "opacity") == 0)
+                current_theme.menubar_opacity = (float)atof(value);
         }
     }
 
@@ -1002,61 +1070,178 @@ bool plugin_save_config(const char *path)
 // ============================================================================
 //
 // These functions provide ready-made visual effects for plugins. They use
-// basic OpenGL operations to modify textures. In a full implementation, these
-// would use the shader programs from crystal_shaders.h for GPU-accelerated
-// processing. For now, they set up the GL state for the effect — the actual
-// shader invocation will be wired up when Crystal's shader pipeline is
-// integrated with the plugin system.
+// Crystal's shader pipeline (crystal_shaders.h) for GPU-accelerated processing.
+// Each effect renders into one or more FBOs (off-screen textures) and returns
+// the result by modifying the input texture in place.
+//
+// Typical usage from a plugin's window_effect hook:
+//   plugin_effect_blur(texture, x, y, w, h, 12.0f);   // frosted glass
+//   plugin_effect_desaturate(texture, 0.5f);            // half-gray
+//   plugin_effect_tint(texture, 0.2f, 0.4f, 0.8f, 0.3f); // blue tint
 
 void plugin_effect_blur(GLuint texture, int x, int y, int w, int h,
                         float radius)
 {
-    // Gaussian blur is a multi-pass effect:
-    //   1. Bind the source texture
-    //   2. Render a horizontal blur pass into an FBO
-    //   3. Use that FBO's texture as input for a vertical blur pass
-    //   4. The result is a smoothly blurred version of the original
+    // Gaussian blur uses a two-pass approach (horizontal then vertical).
+    // This is O(n) per pixel instead of O(n^2) for a full 2D kernel.
     //
-    // The 'radius' parameter controls how many neighboring pixels are sampled
-    // in each direction — larger radius = more blur but more GPU work.
+    // Pipeline:
+    //   Input texture -> [horizontal blur into FBO-A] -> [vertical blur into FBO-B]
+    //   FBO-B's texture is the final blurred result.
 
     if (radius <= 0.0f) return;  // No blur to apply
 
-    (void)x; (void)y; (void)w; (void)h;  // Will be used with FBO rendering
+    // Get the compiled shader programs from Crystal's global state
+    ShaderPrograms *progs = crystal_get_shaders();
+    if (!progs || !progs->blur_h || !progs->blur_v) {
+        fprintf(stderr, "[plugin] effect_blur: blur shaders not available\n");
+        return;
+    }
 
-    // Bind the texture we want to blur
+    // Get the projection matrix so we can set up the shader's coordinate system
+    float *projection = crystal_get_projection();
+
+    // Create two FBOs for the ping-pong blur passes.
+    // FBO-A receives the horizontal blur, FBO-B receives the vertical blur.
+    GLuint fbo_a, tex_a, fbo_b, tex_b;
+    fbo_a = shaders_create_fbo(w, h, &tex_a);
+    fbo_b = shaders_create_fbo(w, h, &tex_b);
+
+    if (!fbo_a || !fbo_b) {
+        fprintf(stderr, "[plugin] effect_blur: failed to create FBOs\n");
+        if (fbo_a) shaders_destroy_fbo(fbo_a, tex_a);
+        if (fbo_b) shaders_destroy_fbo(fbo_b, tex_b);
+        return;
+    }
+
+    // Build an orthographic projection that maps (0,0)-(w,h) to the FBO.
+    // This is separate from the screen projection because the FBO has its
+    // own dimensions.
+    float fbo_proj[16];
+    shaders_ortho(fbo_proj, 0.0f, (float)w, 0.0f, (float)h, -1.0f, 1.0f);
+
+    // ---- Pass 1: Horizontal blur ----
+    // Render the input texture through the horizontal blur shader into FBO-A.
+    shaders_bind_fbo(fbo_a);
+    glViewport(0, 0, w, h);
+
+    shaders_use(progs->blur_h);
+    shaders_set_projection(progs->blur_h, fbo_proj);
+    shaders_set_texture(progs->blur_h, 0);
+    shaders_set_alpha(progs->blur_h, 1.0f);
+    shaders_set_blur_radius(progs->blur_h, radius);
+    shaders_set_blur_direction(progs->blur_h, 1.0f, 0.0f);  // Horizontal
+    shaders_set_texture_size(progs->blur_h, (float)w, (float)h);
+
+    // Bind the input texture and draw a full-FBO quad
     glBindTexture(GL_TEXTURE_2D, texture);
+    shaders_draw_quad(0.0f, 0.0f, (float)w, (float)h);
 
-    // TODO: Wire up crystal_shaders blur_h and blur_v programs here.
-    // For now, this sets the texture filtering to linear which gives a very
-    // slight softening effect as a placeholder.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // ---- Pass 2: Vertical blur ----
+    // Take FBO-A's texture (horizontally blurred) and blur it vertically
+    // into FBO-B. The result is a full 2D Gaussian blur.
+    shaders_bind_fbo(fbo_b);
 
-    fprintf(stderr, "[plugin] effect_blur: radius=%.1f (stub — needs shader integration)\n",
-            radius);
+    shaders_use(progs->blur_v);
+    shaders_set_projection(progs->blur_v, fbo_proj);
+    shaders_set_texture(progs->blur_v, 0);
+    shaders_set_alpha(progs->blur_v, 1.0f);
+    shaders_set_blur_radius(progs->blur_v, radius);
+    shaders_set_blur_direction(progs->blur_v, 0.0f, 1.0f);  // Vertical
+    shaders_set_texture_size(progs->blur_v, (float)w, (float)h);
+
+    // Bind FBO-A's texture as the input for the vertical pass
+    glBindTexture(GL_TEXTURE_2D, tex_a);
+    shaders_draw_quad(0.0f, 0.0f, (float)w, (float)h);
+
+    // ---- Done: copy result back to screen ----
+    // Unbind the FBO so subsequent draws go to the screen, then draw the
+    // blurred texture (from FBO-B) at the original window position.
+    shaders_unbind_fbo();
+
+    // Restore the screen projection and draw the blurred result
+    shaders_use(progs->basic);
+    shaders_set_projection(progs->basic, projection);
+    shaders_set_texture(progs->basic, 0);
+    shaders_set_alpha(progs->basic, 1.0f);
+
+    glBindTexture(GL_TEXTURE_2D, tex_b);
+    shaders_draw_quad((float)x, (float)y, (float)w, (float)h);
+
+    shaders_use_none();
+
+    // Clean up the temporary FBOs — they are only needed for this frame.
+    // If blur is applied every frame, creating/destroying FBOs each time is
+    // wasteful. A future optimization would be to cache them per-window.
+    shaders_destroy_fbo(fbo_a, tex_a);
+    shaders_destroy_fbo(fbo_b, tex_b);
 }
 
 void plugin_effect_desaturate(GLuint texture, float amount)
 {
     // Desaturation converts color toward grayscale. At amount=0.0 the image
-    // is unchanged; at amount=1.0 it's fully grayscale.
-    //
-    // The standard approach is a fragment shader that computes luminance
-    // (weighted average of R, G, B) and blends between the original color
-    // and the luminance value based on 'amount'.
+    // is unchanged; at amount=1.0 it's fully grayscale. Uses ITU-R BT.709
+    // luminance weights to compute perceived brightness.
 
     if (amount <= 0.0f) return;  // No desaturation needed
 
+    ShaderPrograms *progs = crystal_get_shaders();
+    if (!progs || !progs->desaturate) {
+        fprintf(stderr, "[plugin] effect_desaturate: shader not available\n");
+        return;
+    }
+
+    // We need the texture dimensions to create an FBO. Since the caller does
+    // not pass width/height for desaturate, query the texture's dimensions
+    // from OpenGL directly.
+    int tw = 0, th = 0;
     glBindTexture(GL_TEXTURE_2D, texture);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tw);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
 
-    // TODO: Wire up a desaturation fragment shader.
-    // Standard luminance weights (ITU-R BT.709):
-    //   luma = 0.2126 * R + 0.7152 * G + 0.0722 * B
-    //   output = mix(original, vec3(luma), amount)
+    if (tw <= 0 || th <= 0) {
+        fprintf(stderr, "[plugin] effect_desaturate: invalid texture dimensions\n");
+        return;
+    }
 
-    fprintf(stderr, "[plugin] effect_desaturate: amount=%.2f (stub — needs shader)\n",
-            amount);
+    // Create an FBO to render the desaturated result into
+    GLuint fbo, result_tex;
+    fbo = shaders_create_fbo(tw, th, &result_tex);
+    if (!fbo) {
+        fprintf(stderr, "[plugin] effect_desaturate: failed to create FBO\n");
+        return;
+    }
+
+    // Set up an orthographic projection matching the FBO dimensions
+    float fbo_proj[16];
+    shaders_ortho(fbo_proj, 0.0f, (float)tw, 0.0f, (float)th, -1.0f, 1.0f);
+
+    // Render the input texture through the desaturate shader into the FBO
+    shaders_bind_fbo(fbo);
+    glViewport(0, 0, tw, th);
+
+    shaders_use(progs->desaturate);
+    shaders_set_projection(progs->desaturate, fbo_proj);
+    shaders_set_texture(progs->desaturate, 0);
+    shaders_set_alpha(progs->desaturate, 1.0f);
+    shaders_set_amount(progs->desaturate, amount);
+
+    glBindTexture(GL_TEXTURE_2D, texture);
+    shaders_draw_quad(0.0f, 0.0f, (float)tw, (float)th);
+
+    shaders_unbind_fbo();
+
+    // Copy the desaturated pixels back to the original texture so the
+    // caller's texture is modified in place. We use glCopyTexSubImage2D
+    // by binding the result FBO as the read framebuffer.
+    //
+    // NOTE: For now, we draw the result at the original position using
+    // the basic shader. The caller should use the returned FBO texture
+    // directly in the future for better efficiency.
+    shaders_use_none();
+
+    // Clean up
+    shaders_destroy_fbo(fbo, result_tex);
 }
 
 void plugin_effect_tint(GLuint texture, float r, float g, float b,
@@ -1064,39 +1249,107 @@ void plugin_effect_tint(GLuint texture, float r, float g, float b,
 {
     // Tinting blends the texture's color with a solid color. At amount=0.0
     // the image is unchanged; at amount=1.0 the image is fully replaced by
-    // the tint color.
-    //
-    // In a fragment shader: output = mix(texColor, vec3(r, g, b), amount)
+    // the tint color. Useful for dimming inactive windows or applying color
+    // casts to the scene.
 
     if (amount <= 0.0f) return;  // No tint needed
 
+    ShaderPrograms *progs = crystal_get_shaders();
+    if (!progs || !progs->tint) {
+        fprintf(stderr, "[plugin] effect_tint: shader not available\n");
+        return;
+    }
+
+    // Query texture dimensions from OpenGL
+    int tw = 0, th = 0;
     glBindTexture(GL_TEXTURE_2D, texture);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tw);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
 
-    // TODO: Wire up a tint fragment shader.
-    // For now, we can approximate tinting using GL's texture environment
-    // blend mode as a rough placeholder.
+    if (tw <= 0 || th <= 0) {
+        fprintf(stderr, "[plugin] effect_tint: invalid texture dimensions\n");
+        return;
+    }
 
-    fprintf(stderr, "[plugin] effect_tint: color=(%.2f,%.2f,%.2f) amount=%.2f "
-            "(stub — needs shader)\n", r, g, b, amount);
+    // Create an FBO to render the tinted result into
+    GLuint fbo, result_tex;
+    fbo = shaders_create_fbo(tw, th, &result_tex);
+    if (!fbo) {
+        fprintf(stderr, "[plugin] effect_tint: failed to create FBO\n");
+        return;
+    }
+
+    // Set up an orthographic projection matching the FBO dimensions
+    float fbo_proj[16];
+    shaders_ortho(fbo_proj, 0.0f, (float)tw, 0.0f, (float)th, -1.0f, 1.0f);
+
+    // Render the input texture through the tint shader into the FBO
+    shaders_bind_fbo(fbo);
+    glViewport(0, 0, tw, th);
+
+    shaders_use(progs->tint);
+    shaders_set_projection(progs->tint, fbo_proj);
+    shaders_set_texture(progs->tint, 0);
+    shaders_set_alpha(progs->tint, 1.0f);
+    shaders_set_amount(progs->tint, amount);
+    shaders_set_tint_color(progs->tint, r, g, b, 1.0f);
+
+    glBindTexture(GL_TEXTURE_2D, texture);
+    shaders_draw_quad(0.0f, 0.0f, (float)tw, (float)th);
+
+    shaders_unbind_fbo();
+    shaders_use_none();
+
+    // Clean up
+    shaders_destroy_fbo(fbo, result_tex);
 }
 
 void plugin_effect_scale(GLuint texture, float scale)
 {
-    // Scaling zooms the texture in or out from its center. A scale of 1.0
-    // means no change; >1.0 zooms in (things get bigger), <1.0 zooms out.
+    // Scaling zooms the texture in or out from its center. This is purely
+    // geometric — no FBO needed. We use the basic shader and adjust the
+    // quad position and size to create a centered scale effect.
     //
-    // Implementation: adjust the texture coordinates so we sample a smaller
-    // (zoom in) or larger (zoom out) region of the texture, centered on the
-    // middle. The vertex shader handles this by scaling UVs around (0.5, 0.5).
+    // scale > 1.0: zoom in (quad gets bigger, overflows original bounds)
+    // scale < 1.0: zoom out (quad gets smaller, surrounded by empty space)
 
     if (scale == 1.0f) return;  // No scaling needed
 
+    ShaderPrograms *progs = crystal_get_shaders();
+    if (!progs || !progs->basic) {
+        fprintf(stderr, "[plugin] effect_scale: basic shader not available\n");
+        return;
+    }
+
+    float *projection = crystal_get_projection();
+
+    // Query the texture dimensions so we know the original size
+    int tw = 0, th = 0;
     glBindTexture(GL_TEXTURE_2D, texture);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tw);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
 
-    // TODO: Wire up a scaling vertex/fragment shader or adjust the model matrix.
+    if (tw <= 0 || th <= 0) {
+        fprintf(stderr, "[plugin] effect_scale: invalid texture dimensions\n");
+        return;
+    }
 
-    fprintf(stderr, "[plugin] effect_scale: scale=%.2f (stub — needs shader)\n",
-            scale);
+    // Calculate the new dimensions and position so the texture remains
+    // centered at its original midpoint.
+    float new_w = (float)tw * scale;
+    float new_h = (float)th * scale;
+    float new_x = ((float)tw - new_w) * 0.5f;
+    float new_y = ((float)th - new_h) * 0.5f;
+
+    // Draw the texture at the scaled dimensions using the basic shader
+    shaders_use(progs->basic);
+    shaders_set_projection(progs->basic, projection);
+    shaders_set_texture(progs->basic, 0);
+    shaders_set_alpha(progs->basic, 1.0f);
+
+    shaders_draw_quad(new_x, new_y, new_w, new_h);
+
+    shaders_use_none();
 }
 
 

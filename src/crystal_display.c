@@ -23,6 +23,7 @@
 #define _GNU_SOURCE  // Needed for some POSIX extensions (e.g., setsid)
 
 #include "crystal_display.h"
+#include "wm_compat.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +36,14 @@
 // It tells us what monitors are connected, their resolutions, refresh rates,
 // and properties like VRR capability.
 #include <X11/extensions/Xrandr.h>
+
+// XComposite — the X11 extension that controls off-screen redirection.
+// Normally, Crystal redirects all windows to off-screen pixmaps so we can
+// composite them via OpenGL. For direct scanout, we "unredirect" a single
+// fullscreen window so the X server paints it straight to the display,
+// bypassing the compositor entirely. This is the same technique picom uses
+// for fullscreen unredirection.
+#include <X11/extensions/Xcomposite.h>
 
 
 // ============================================================================
@@ -710,35 +719,148 @@ void display_enable_direct_scanout(Window win, Display *dpy)
         return;
     }
 
+    // If we're already scanning out a different window, disable that first
+    // so it gets re-redirected back to off-screen compositing.
+    if (direct_scanout_win != None && direct_scanout_win != win) {
+        display_disable_direct_scanout();
+    }
+
+    // ── Unredirect the window via XComposite ──
+    //
+    // Normally, Crystal calls XCompositeRedirectSubwindows() during init,
+    // which tells the X server to draw every window into an off-screen pixmap
+    // instead of directly to the screen. Crystal then reads those pixmaps as
+    // GL textures and composites them together.
+    //
+    // XCompositeUnredirectWindow() reverses this for a single window. The X
+    // server goes back to painting that window directly to the framebuffer,
+    // completely bypassing our compositor. The result:
+    //   - Zero extra buffer copies (the game's buffer goes straight to the
+    //     display via the X server's built-in DRI path).
+    //   - One less frame of latency (no waiting for Crystal to composite).
+    //   - Reduced GPU load (Crystal doesn't need to texture-map this window).
+    //
+    // CompositeRedirectManual matches the redirect mode we used when setting
+    // up redirection in crystal.c — the unredirect mode must match the
+    // original redirect mode.
+    XCompositeUnredirectWindow(dpy, win, CompositeRedirectManual);
+
+    // Raise the window to the top of the stacking order. This ensures the
+    // X server displays it above everything else — since we're not compositing,
+    // stacking order is handled by the X server's painter's algorithm.
+    XRaiseWindow(dpy, win);
+
+    // Record that direct scanout is now active. The compositor's main loop
+    // checks direct_scanout_win to know whether to skip rendering.
     direct_scanout_win = win;
 
-    // In a full implementation, we would:
-    //   1. Tell the DRM/KMS layer to set this window's buffer as the
-    //      primary plane's framebuffer (via DRM ioctls or a helper library).
-    //   2. Stop calling crystal_composite() for the display this window
-    //      covers (saving GPU time).
-    //   3. Continue compositing on other displays if this is a multi-monitor
-    //      setup.
-    //
-    // For now, we set the state flag. The compositor's main loop checks this
-    // and skips compositing when direct scanout is active.
+    // Flush the connection so the unredirect takes effect immediately.
+    // Without this, the request might sit in Xlib's send buffer for a few
+    // milliseconds, causing a visible glitch frame where the compositor still
+    // draws the old content.
+    XFlush(dpy);
 
-    fprintf(stderr, "[display] Direct scanout enabled for window 0x%lx\n",
-            (unsigned long)win);
+    fprintf(stderr, "[display] Direct scanout enabled for window 0x%lx "
+            "(XComposite unredirect)\n", (unsigned long)win);
 }
 
 void display_disable_direct_scanout(void)
 {
     if (direct_scanout_win == None) return;
 
-    fprintf(stderr, "[display] Direct scanout disabled — resuming compositing\n");
+    if (!display_dpy) {
+        // If the display connection is gone (e.g., during shutdown), just
+        // clear the state — we can't talk to the X server anymore.
+        direct_scanout_win = None;
+        return;
+    }
 
-    // In a full implementation, we would:
-    //   1. Restore the compositor's framebuffer as the primary plane's source.
-    //   2. Trigger an immediate composite pass to avoid a blank frame.
-    //   3. Re-bind the window's texture so it appears in the next composite.
+    // ── Re-redirect the window back to off-screen compositing ──
+    //
+    // This reverses the XCompositeUnredirectWindow() call from
+    // display_enable_direct_scanout(). The X server will once again draw this
+    // window into an off-screen pixmap, and Crystal will composite it via GL
+    // on the next frame.
+    //
+    // CompositeRedirectManual must match the mode used in both the original
+    // redirect (in crystal.c) and the unredirect (in enable_direct_scanout).
+    XCompositeRedirectWindow(display_dpy, direct_scanout_win,
+                             CompositeRedirectManual);
+
+    fprintf(stderr, "[display] Direct scanout disabled for window 0x%lx — "
+            "resuming compositing\n", (unsigned long)direct_scanout_win);
 
     direct_scanout_win = None;
+
+    // Flush so the re-redirect takes effect before the next composite pass.
+    // This prevents a blank frame between the scanout window being removed
+    // from direct display and the compositor picking it back up.
+    XFlush(display_dpy);
+}
+
+
+// display_check_direct_scanout() — Per-frame check for direct scanout state.
+//
+// This function is the "brain" of the direct scanout system. It runs once per
+// frame and makes the decision: should the compositor be rendering, or should
+// we let a fullscreen game bypass us entirely?
+//
+// The logic is straightforward:
+//   - If scanout is already active, verify the window is still eligible.
+//     Games can exit fullscreen, get covered by a notification, or close
+//     entirely — any of those means we need to take compositing back.
+//   - If scanout is not active, scan the client list for a window that
+//     qualifies. This catches the moment a game goes fullscreen.
+//
+// Returns true if direct scanout is active (compositor should skip rendering).
+bool display_check_direct_scanout(AuraWM *wm)
+{
+    if (!wm || !wm->dpy) return false;
+
+    // ── Case 1: Scanout is currently active — validate the window ──
+    if (direct_scanout_win != None) {
+
+        // Check if the window is still eligible for direct scanout.
+        // It might have left fullscreen, been covered by another window,
+        // or been destroyed entirely.
+        if (!display_can_direct_scanout(direct_scanout_win, wm->dpy)) {
+            // The window no longer qualifies — disable scanout so Crystal
+            // takes over compositing again on the next frame.
+            fprintf(stderr, "[display] Scanout window 0x%lx no longer eligible "
+                    "— disabling direct scanout\n",
+                    (unsigned long)direct_scanout_win);
+            display_disable_direct_scanout();
+            return false;
+        }
+
+        // Still eligible — keep scanout active, compositor skips rendering.
+        return true;
+    }
+
+    // ── Case 2: Scanout is not active — look for an eligible window ──
+    //
+    // Walk the client list and check each window. In practice, at most one
+    // window can qualify (it must cover the entire display and be topmost),
+    // so this loop typically exits on the first fullscreen window it finds.
+    for (int i = 0; i < wm->num_clients; i++) {
+        Window win = wm->clients[i].client;
+        if (win == None) continue;
+
+        if (display_can_direct_scanout(win, wm->dpy)) {
+            // Found a fullscreen, opaque, topmost window — enable scanout.
+            fprintf(stderr, "[display] Window 0x%lx qualifies for direct "
+                    "scanout — enabling bypass\n", (unsigned long)win);
+            display_enable_direct_scanout(win, wm->dpy);
+
+            // If enable succeeded (the window state was set), return true.
+            // If it failed (e.g., a race condition changed the window between
+            // our check and the enable call), return false so we composite.
+            return (direct_scanout_win != None);
+        }
+    }
+
+    // No window qualifies — normal compositing continues.
+    return false;
 }
 
 

@@ -54,6 +54,10 @@
 #include <stdbool.h>
 #include <X11/Xlib.h>
 
+// Forward declaration — full definition lives in wm_compat.h.
+// We only need the pointer type here, not the struct internals.
+struct AuraWM;
+
 
 // ============================================================================
 //  Display output information
@@ -324,6 +328,30 @@ void display_enable_direct_scanout(Window win, Display *dpy);
 // Called when the window is no longer fullscreen, another window is raised
 // above it, or gaming mode is switched off.
 void display_disable_direct_scanout(void);
+
+// Check if direct scanout should be enabled or disabled this frame.
+//
+// This is the main entry point for automatic direct scanout management.
+// Call it once per frame (typically from the compositor's main loop). It
+// examines the current window state and decides whether to enable or
+// disable direct scanout:
+//
+//   - If scanout is currently active, it checks whether the scanout window
+//     is still eligible (still fullscreen, still topmost, etc.). If not,
+//     it disables scanout so the compositor resumes.
+//
+//   - If scanout is not active, it scans the client list for any window
+//     that qualifies for direct scanout. If one is found, it enables
+//     scanout for that window.
+//
+// Parameters:
+//   wm — The window manager state, which provides the client list and
+//         X display connection needed to check window properties.
+//
+// Returns true if direct scanout is currently active (the compositor
+// should skip rendering). Returns false if the compositor should render
+// normally.
+bool display_check_direct_scanout(struct AuraWM *wm);
 
 
 // ============================================================================

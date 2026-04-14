@@ -1,0 +1,156 @@
+; Copyright (c) 2026 Kyle Blizzard. All Rights Reserved.
+; This code is publicly visible for portfolio purposes only.
+; Unauthorized copying, forking, or distribution of this file,
+; via any medium, is strictly prohibited.
+;
+; ============================================================================
+;  Crystal Compositor Theme: Snow Leopard
+; ============================================================================
+;
+; Pixel-perfect recreation of Mac OS X 10.6 Snow Leopard's visual style.
+; This is the default theme and serves as the reference implementation —
+; every theme value is documented here so new themes can be created by
+; copying this file and changing values.
+;
+; FORMAT:
+;   - Sections are in [Brackets]
+;   - Keys are key = value pairs
+;   - Comments start with ; (semicolon)
+;   - Colors are comma-separated RGB floats from 0.0 to 1.0
+;   - Boolean values are 0 (false) or 1 (true)
+;
+; ============================================================================
+
+
+; ── Theme metadata ──
+; The name shows up in any future theme picker UI. The author is just credit.
+
+[Theme]
+name = Snow Leopard
+author = Kyle Blizzard
+
+
+; ── Title bar gradients ──
+; Snow Leopard title bars use a vertical gradient: lighter at the top, darker
+; at the bottom. Active (focused) windows have more contrast; inactive windows
+; are flatter and lighter so they recede visually. Colors are RGB floats.
+
+[TitleBar]
+active_top = 0.83, 0.83, 0.83
+active_bottom = 0.66, 0.66, 0.66
+inactive_top = 0.93, 0.93, 0.93
+inactive_bottom = 0.86, 0.86, 0.86
+
+
+; ── Window border ──
+; The thin line around the window frame. Active windows get a darker border
+; to make them stand out. The corner radius creates the rounded rectangles
+; that are signature Aqua.
+
+[Border]
+color_active = 0.50, 0.50, 0.50
+color_inactive = 0.70, 0.70, 0.70
+width = 1.0
+corner_radius = 5.0
+
+
+; ── Drop shadow ──
+; Every window casts a soft shadow to create the illusion of floating above
+; the desktop. The shadow is a Gaussian blur with a slight downward offset
+; (y_offset) to simulate a light source above the screen.
+;
+; radius:          how far the shadow spreads (bigger = softer, more diffuse)
+; alpha_active:    shadow darkness for focused windows (0.0=invisible, 1.0=black)
+; alpha_inactive:  shadow darkness for unfocused windows (lighter = less prominent)
+; y_offset:        how many pixels the shadow is shifted downward
+
+[Shadow]
+radius = 22
+alpha_active = 0.45
+alpha_inactive = 0.22
+y_offset = 4
+
+
+; ── UI accent colors ──
+; selection: the highlight color for selected text and list items (macOS blue)
+; sidebar:   the background color of sidebar panels (like Finder's sidebar)
+
+[Colors]
+selection = 0.24, 0.47, 0.85
+sidebar = 0.92, 0.92, 0.92
+
+
+; ── Typography ──
+; Snow Leopard uses Lucida Grande at 11pt for virtually all UI text.
+; This font must be installed at ~/.local/share/fonts/LucidaGrande.ttc.
+
+[Font]
+name = Lucida Grande
+size = 11
+
+
+; ── Effects ──
+; Blur and transparency settings for frosted-glass surfaces.
+;
+; blur_behind_radius:      general blur for any frosted glass panel (0 = off)
+; dock_blur_radius:        blur specifically for the dock shelf
+; menubar_blur_radius:     blur specifically for the menu bar
+; window_opacity_inactive: opacity of unfocused windows (1.0 = fully opaque).
+;                          Snow Leopard does NOT dim inactive windows, so this
+;                          stays at 1.0. Set below 1.0 for a see-through effect.
+
+[Effects]
+blur_behind_radius = 20.0
+dock_blur_radius = 15.0
+menubar_blur_radius = 10.0
+window_opacity_inactive = 1.0
+
+
+; ── Animation ──
+; minimize_style: which animation plays when a window is minimized.
+;   0 = Genie effect (the classic macOS warp into the dock)
+;   1 = Scale (simple shrink toward the dock)
+;   2 = Fade (dissolve in place)
+;
+; speed: multiplier for all animation durations.
+;   1.0 = normal speed
+;   0.5 = twice as fast (snappy)
+;   2.0 = twice as slow (dramatic)
+
+[Animation]
+minimize_style = 0
+speed = 1.0
+
+
+; ── Title bar buttons ──
+; style: which visual style to use for close / minimize / zoom buttons.
+;   0 = Aqua traffic lights (colored circles with gloss — the Snow Leopard look)
+;   1 = Flat (solid colored circles, no gloss)
+;   2 = Classic (square buttons with outlines, like Mac OS 9)
+
+[Buttons]
+style = 0
+
+
+; ── Dock ──
+; The application launcher shelf at the bottom of the screen.
+;
+; opacity:       how see-through the glass shelf is (0.0-1.0)
+; magnification: how much icons grow when hovered (1.0=no growth, 2.0=double)
+; reflection:    whether to draw icon reflections on the shelf surface (0 or 1)
+
+[Dock]
+opacity = 0.85
+magnification = 2.0
+reflection = 1
+
+
+; ── Menu bar ──
+; The 22px bar at the very top of the screen.
+;
+; opacity: how see-through the menu bar background is. Snow Leopard's menu bar
+;          is slightly translucent — you can just barely see the desktop wallpaper
+;          through it. Set to 1.0 for a fully opaque bar.
+
+[MenuBar]
+opacity = 0.9

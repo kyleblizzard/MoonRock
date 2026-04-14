@@ -136,6 +136,37 @@ typedef struct {
 
 
 // ============================================================================
+//  Minimize animation styles
+// ============================================================================
+//
+// When a user clicks the minimize button (the yellow "traffic light"), the
+// window shrinks down to the dock. The animation style determines HOW it
+// shrinks. Snow Leopard uses the famous "genie" effect where the window
+// warps into the dock like smoke going into a lamp.
+
+typedef enum {
+    ANIM_GENIE = 0,   // Classic macOS genie warp into the dock
+    ANIM_SCALE = 1,   // Simple scale-down to the dock position
+    ANIM_FADE  = 2,   // Fade out in place (no spatial movement)
+} MinimizeAnimation;
+
+
+// ============================================================================
+//  Title bar button styles
+// ============================================================================
+//
+// The three buttons in the top-left of a window (close, minimize, zoom) can
+// be drawn in different visual styles depending on the theme. Snow Leopard
+// uses the iconic colored "traffic light" circles (red, yellow, green).
+
+typedef enum {
+    BUTTON_AQUA    = 0,   // macOS traffic light buttons (default for Snow Leopard)
+    BUTTON_FLAT    = 1,   // Flat/modern button style (solid circles, no gloss)
+    BUTTON_CLASSIC = 2,   // Classic Mac OS style (square with outline)
+} ButtonStyle;
+
+
+// ============================================================================
 //  Theme definition
 // ============================================================================
 //
@@ -177,6 +208,55 @@ typedef struct {
     // Typography
     char font_name[128];             // Font family name (e.g., "Lucida Grande")
     int  font_size;                  // Font size in points
+
+    // ── Effects ──
+    //
+    // These control frosted-glass blur and window transparency. Blur is what
+    // makes panels like the dock and menu bar look translucent — you can see
+    // a soft, blurred version of whatever is behind them. A radius of 0
+    // disables the effect entirely.
+
+    float blur_behind_radius;        // Gaussian blur radius for frosted glass panels (0=off, ~20 for SL)
+    float dock_blur_radius;          // Blur radius specifically for the dock shelf
+    float menubar_blur_radius;       // Blur radius specifically for the menu bar
+    float window_opacity_inactive;   // Opacity for unfocused windows (1.0=opaque, <1.0=see-through)
+
+    // ── Animation ──
+    //
+    // Controls how windows animate when minimized and the overall speed of
+    // all compositor animations. The minimize_animation field selects which
+    // visual effect to use (see MinimizeAnimation enum above). The speed
+    // multiplier scales ALL animation durations — useful for accessibility
+    // or personal preference.
+
+    int   minimize_animation;        // Which minimize effect: ANIM_GENIE, ANIM_SCALE, or ANIM_FADE
+    float animation_speed;           // Duration multiplier (1.0=default, 0.5=fast, 2.0=slow)
+
+    // ── Buttons ──
+    //
+    // Selects the visual style for the three title bar buttons (close,
+    // minimize, zoom). See ButtonStyle enum above.
+
+    int   button_style;              // Title bar button style: BUTTON_AQUA, BUTTON_FLAT, or BUTTON_CLASSIC
+
+    // ── Dock ──
+    //
+    // The dock is the application launcher shelf at the bottom of the screen.
+    // These settings control its visual appearance: how see-through it is,
+    // how much icons grow when hovered, and whether icons show reflections
+    // on the glass shelf surface.
+
+    float dock_opacity;              // Dock shelf opacity (0.0=invisible, 1.0=fully opaque)
+    float dock_magnification;        // Icon magnification on hover (1.0=none, 2.0=double size)
+    bool  dock_reflection;           // Whether to draw icon reflections on the dock shelf
+
+    // ── Menu bar ──
+    //
+    // The menu bar is the 22px strip at the very top of the screen. This
+    // controls how opaque its background is. Snow Leopard's menu bar is
+    // slightly translucent so you can just barely see the desktop through it.
+
+    float menubar_opacity;           // Menu bar background opacity (0.0=transparent, 1.0=opaque)
 } ThemeDefinition;
 
 

@@ -371,6 +371,47 @@ static const char *GENIE_VERT_SRC =
     "    v_texcoord = a_texcoord;\n"
     "}\n";
 
+// ---- Desaturation fragment shader ----
+// Blends a texture toward grayscale using ITU-R BT.709 luminance weights.
+// u_amount controls the blend: 0.0 = full color, 1.0 = fully grayscale.
+static const char *DESATURATE_FRAG_SRC =
+    "#version 120\n"
+    "\n"
+    "varying vec2 v_texcoord;\n"
+    "\n"
+    "uniform sampler2D u_texture;\n"
+    "uniform float u_alpha;\n"
+    "uniform float u_amount;  // 0.0 = full color, 1.0 = full grayscale\n"
+    "\n"
+    "void main() {\n"
+    "    vec4 color = texture2D(u_texture, v_texcoord);\n"
+    "    // BT.709 luminance: green contributes most, blue least\n"
+    "    float luma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));\n"
+    "    color.rgb = mix(color.rgb, vec3(luma), u_amount);\n"
+    "    color.a *= u_alpha;\n"
+    "    gl_FragColor = color;\n"
+    "}\n";
+
+// ---- Color tint fragment shader ----
+// Blends a texture toward a solid tint color. u_amount controls the blend:
+// 0.0 = no tint, 1.0 = original color fully replaced by u_tint_color.
+static const char *TINT_FRAG_SRC =
+    "#version 120\n"
+    "\n"
+    "varying vec2 v_texcoord;\n"
+    "\n"
+    "uniform sampler2D u_texture;\n"
+    "uniform float u_alpha;\n"
+    "uniform vec4 u_tint_color;  // RGBA tint color\n"
+    "uniform float u_amount;     // 0.0 = no tint, 1.0 = full tint\n"
+    "\n"
+    "void main() {\n"
+    "    vec4 color = texture2D(u_texture, v_texcoord);\n"
+    "    color.rgb = mix(color.rgb, u_tint_color.rgb, u_amount);\n"
+    "    color.a *= u_alpha;\n"
+    "    gl_FragColor = color;\n"
+    "}\n";
+
 
 // ============================================================================
 //  SECTION: Uniform location cache
@@ -403,6 +444,8 @@ typedef struct {
     GLint  texture_size;     // u_texture_size
     GLint  genie_progress;   // u_genie_progress
     GLint  genie_target;     // u_genie_target
+    GLint  amount;           // u_amount (desaturate/tint blend factor)
+    GLint  tint_color;       // u_tint_color (RGBA tint color)
 } UniformCache;
 
 // Our cache array. Entries with program==0 are unused.
@@ -448,6 +491,8 @@ static UniformCache *get_cache(GLuint program)
     c->texture_size   = pfn_glGetUniformLocation(program, "u_texture_size");
     c->genie_progress = pfn_glGetUniformLocation(program, "u_genie_progress");
     c->genie_target   = pfn_glGetUniformLocation(program, "u_genie_target");
+    c->amount         = pfn_glGetUniformLocation(program, "u_amount");
+    c->tint_color     = pfn_glGetUniformLocation(program, "u_tint_color");
 
     return c;
 }
@@ -763,6 +808,28 @@ bool shaders_init(ShaderPrograms *progs, const char *shader_dir)
     if (vert_free) free((char *)genie_vert);
     if (frag_free) free((char *)genie_frag);
 
+    // --- desaturate: grayscale blend effect ---
+    // Uses the basic vertex shader (same quad transform) and a fragment shader
+    // that blends between the original color and its luminance value.
+    const char *desat_vert = try_load_source(shader_dir, "basic.vert",
+                                             BASIC_VERT_SRC, &vert_free);
+    const char *desat_frag = try_load_source(shader_dir, "desaturate.frag",
+                                             DESATURATE_FRAG_SRC, &frag_free);
+    progs->desaturate = compile_program(desat_vert, desat_frag, "desaturate");
+    if (vert_free) free((char *)desat_vert);
+    if (frag_free) free((char *)desat_frag);
+
+    // --- tint: color overlay effect ---
+    // Uses the basic vertex shader and a fragment shader that blends the
+    // texture color toward a uniform tint color.
+    const char *tint_vert = try_load_source(shader_dir, "basic.vert",
+                                            BASIC_VERT_SRC, &vert_free);
+    const char *tint_frag = try_load_source(shader_dir, "tint.frag",
+                                            TINT_FRAG_SRC, &frag_free);
+    progs->tint = compile_program(tint_vert, tint_frag, "tint");
+    if (vert_free) free((char *)tint_vert);
+    if (frag_free) free((char *)tint_frag);
+
     // The 'basic' program is essential — if it failed, we can't render at all
     if (!progs->basic) {
         fprintf(stderr, "[crystal] FATAL: basic shader program failed to compile\n");
@@ -771,9 +838,11 @@ bool shaders_init(ShaderPrograms *progs, const char *shader_dir)
     }
 
     fprintf(stderr, "[crystal] Shader initialization complete. Programs: "
-            "basic=%u blur_h=%u blur_v=%u shadow=%u solid=%u genie=%u\n",
+            "basic=%u blur_h=%u blur_v=%u shadow=%u solid=%u genie=%u "
+            "desaturate=%u tint=%u\n",
             progs->basic, progs->blur_h, progs->blur_v,
-            progs->shadow, progs->solid, progs->genie);
+            progs->shadow, progs->solid, progs->genie,
+            progs->desaturate, progs->tint);
 
     return true;
 }
@@ -799,6 +868,8 @@ void shaders_shutdown(ShaderPrograms *progs)
     DELETE_PROG(shadow);
     DELETE_PROG(solid);
     DELETE_PROG(genie);
+    DELETE_PROG(desaturate);
+    DELETE_PROG(tint);
 
     #undef DELETE_PROG
 
@@ -925,6 +996,27 @@ void shaders_set_genie_target(GLuint program, float target_x, float target_y)
     UniformCache *c = get_cache(program);
     if (c->genie_target >= 0) {
         pfn_glUniform2f(c->genie_target, target_x, target_y);
+    }
+}
+
+
+// ============================================================================
+//  SECTION: Desaturate / Tint uniform setters
+// ============================================================================
+
+void shaders_set_amount(GLuint program, float amount)
+{
+    UniformCache *c = get_cache(program);
+    if (c->amount >= 0) {
+        pfn_glUniform1f(c->amount, amount);
+    }
+}
+
+void shaders_set_tint_color(GLuint program, float r, float g, float b, float a)
+{
+    UniformCache *c = get_cache(program);
+    if (c->tint_color >= 0) {
+        pfn_glUniform4f(c->tint_color, r, g, b, a);
     }
 }
 

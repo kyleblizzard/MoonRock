@@ -23,6 +23,7 @@
 #include "crystal_shaders.h"
 #include "crystal.h"
 
+#include <GL/glext.h>       // GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, etc.
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,6 +69,65 @@ static int next_space_id = 1;
 
 
 // ============================================================================
+//  Drag state — for dragging windows between Spaces
+// ============================================================================
+//
+// When the user presses the mouse on a tiled window and moves it, we enter
+// drag mode. The dragged window follows the cursor. If the user releases
+// the mouse over a Space thumbnail, we move the window to that Space.
+// If released elsewhere, the window snaps back to its original position.
+
+static struct {
+    bool active;            // True while a window is being dragged
+    int window_idx;         // Index into mc.tiled_windows[] of the dragged window
+    float offset_x;         // Cursor offset from the window's top-left corner (X)
+    float offset_y;         // Cursor offset from the window's top-left corner (Y)
+    float current_x;        // Current draw position of the dragged window (X)
+    float current_y;        // Current draw position of the dragged window (Y)
+    int start_x;            // Mouse X when drag started (for dead-zone detection)
+    int start_y;            // Mouse Y when drag started (for dead-zone detection)
+    bool past_threshold;    // True once the cursor has moved far enough to start
+} drag;
+
+// Minimum number of pixels the cursor must move before a drag begins.
+// This prevents accidental drags when the user just wants to click.
+#define DRAG_THRESHOLD 8
+
+
+// ============================================================================
+//  Slide animation state — for Space switching transitions
+// ============================================================================
+//
+// When switching Spaces, we animate a horizontal slide. The entire window
+// grid slides left or right, and the new Space's windows slide in from the
+// opposite side. This gives the illusion of physically moving between desks.
+
+static struct {
+    bool active;            // True while a slide animation is playing
+    double start_time;      // Monotonic timestamp when the slide started
+    double duration;        // How long the slide takes (0.3 seconds)
+    float direction;        // -1.0 for slide left, +1.0 for slide right
+} slide_anim;
+
+
+// ============================================================================
+//  Thumbnail FBO state — for rendering Space previews off-screen
+// ============================================================================
+//
+// Each Space thumbnail is rendered into a small FBO (framebuffer object).
+// We keep a single reusable FBO and re-render into it whenever a Space's
+// thumbnail is marked dirty.
+
+// Thumbnail dimensions in pixels. Small enough to be fast, large enough
+// to show window layout clearly.
+#define THUMB_FBO_W 200
+#define THUMB_FBO_H 125
+
+static GLuint thumb_fbo = 0;        // Reusable FBO handle (0 = not created yet)
+static GLuint thumb_fbo_tex = 0;    // Texture attached to the FBO (temporary)
+
+
+// ============================================================================
 //  Forward declarations for static helper functions
 // ============================================================================
 
@@ -77,6 +137,8 @@ static int find_space_index(int space_id);
 static int find_window_in_space(MCSpace *space, Window win);
 static void map_space_windows(AuraWM *wm, int space_index);
 static void unmap_space_windows(AuraWM *wm, int space_index);
+static void mc_render_space_thumbnail(AuraWM *wm, int space_index);
+static void mc_ensure_thumbnails(AuraWM *wm);
 
 
 // ============================================================================
@@ -122,6 +184,10 @@ void mc_init(AuraWM *wm)
         }
     }
 
+    // Clear drag and slide animation state.
+    memset(&drag, 0, sizeof(drag));
+    memset(&slide_anim, 0, sizeof(slide_anim));
+
     fprintf(stderr, "[Mission Control] Initialized with %d windows on Desktop 1\n",
             first->window_count);
 }
@@ -147,11 +213,20 @@ void mc_shutdown(AuraWM *wm)
         }
     }
 
+    // Destroy the reusable thumbnail FBO if it exists.
+    if (thumb_fbo) {
+        shaders_destroy_fbo(thumb_fbo, thumb_fbo_tex);
+        thumb_fbo     = 0;
+        thumb_fbo_tex = 0;
+    }
+
     // Zero everything so mc_is_active() returns false and any stale
     // references are cleared.
     memset(&mc, 0, sizeof(mc));
     mc.hover_window = -1;
     mc.hover_space  = -1;
+    memset(&drag, 0, sizeof(drag));
+    memset(&slide_anim, 0, sizeof(slide_anim));
 
     fprintf(stderr, "[Mission Control] Shut down\n");
 }
@@ -235,18 +310,33 @@ void mc_enter(AuraWM *wm)
         mc.tiled_windows[idx].orig_w = (float)c->w;
         mc.tiled_windows[idx].orig_h = (float)c->h;
 
-        // The GL texture for this window was created by Crystal when the
-        // window was mapped (crystal_window_mapped). We need to retrieve it.
-        // For now, we use 0 as a placeholder — Crystal's composite loop will
-        // bind the real texture based on the window ID during drawing.
-        // TODO: Add crystal_get_window_texture(wm, c) to retrieve the handle.
-        mc.tiled_windows[idx].texture = 0;
+        // Look up the GL texture for this window. Crystal created the texture
+        // when the window was first mapped (crystal_window_mapped). We retrieve
+        // it by the frame window ID since that's what Crystal binds textures to.
+        // If the window has no texture yet (e.g., it was just created), we get
+        // 0 back, which mc_draw() handles by showing a placeholder rectangle.
+        GLuint tex = crystal_get_window_texture_id(c->frame);
+        if (tex == 0) {
+            // Fall back to the client window ID — some windows may be tracked
+            // by their client window rather than the frame.
+            tex = crystal_get_window_texture_id(c->client);
+        }
+        mc.tiled_windows[idx].texture = tex;
     }
 
     // --- Step 2: Compute the tiled grid layout ---
     // This arranges all snapshotted windows into a grid that fits the screen,
     // with space reserved at the top for desktop thumbnails.
     compute_tiled_layout(&mc, wm->root_w, wm->root_h);
+
+    // --- Step 2.5: Render Space thumbnails ---
+    // Pre-render a miniaturized preview of each Space's desktop into a small
+    // texture. These thumbnails are shown at the top of the Mission Control
+    // overlay so the user can see what's on each virtual desktop at a glance.
+    mc_ensure_thumbnails(wm);
+
+    // Clear any leftover drag state from a previous Mission Control session.
+    memset(&drag, 0, sizeof(drag));
 
     // --- Step 3: Start the enter animation ---
     mc.animating_in  = true;
@@ -393,6 +483,133 @@ static void compute_tiled_layout(MissionControlState *state, int screen_w, int s
 
 
 // ============================================================================
+//  Space thumbnail rendering
+// ============================================================================
+//
+// Each Space (virtual desktop) gets a small thumbnail preview drawn at the
+// top of Mission Control. These thumbnails are rendered off-screen into an
+// FBO at a reduced resolution, then stored as a texture on the MCSpace struct.
+//
+// We use a single shared FBO and re-render it for each Space that needs an
+// update. The result is copied into the Space's own thumbnail_tex.
+
+// Render (or re-render) the thumbnail for a single Space.
+//
+// This creates a miniaturized view of all the windows on the given Space by:
+//   1. Binding a small FBO (200x125 pixels).
+//   2. Setting up an orthographic projection that maps the full screen
+//      dimensions into the tiny FBO resolution (effectively a zoom-out).
+//   3. Drawing each window in the Space at its scaled-down position.
+//   4. Copying the FBO's texture into the Space's thumbnail_tex.
+//
+// space_index: the index into mc.spaces[] of the Space to render.
+static void mc_render_space_thumbnail(AuraWM *wm, int space_index)
+{
+    MCSpace *space = &mc.spaces[space_index];
+
+    // Get the shader programs and projection from Crystal's compositor.
+    ShaderPrograms *progs = crystal_get_shaders();
+    if (!progs || !progs->basic) return;  // Shaders not ready yet
+
+    // Create the shared FBO on first use. All thumbnails share the same FBO
+    // — we render into it one Space at a time and copy the result out.
+    if (thumb_fbo == 0) {
+        thumb_fbo = shaders_create_fbo(THUMB_FBO_W, THUMB_FBO_H, &thumb_fbo_tex);
+        if (thumb_fbo == 0) {
+            fprintf(stderr, "[Mission Control] Failed to create thumbnail FBO\n");
+            return;
+        }
+    }
+
+    // If this Space does not have its own thumbnail texture yet, create one.
+    // This texture persists across frames — we only re-render it when the
+    // Space's window layout changes (thumbnail_dirty flag).
+    if (space->thumbnail_tex == 0) {
+        glGenTextures(1, &space->thumbnail_tex);
+        glBindTexture(GL_TEXTURE_2D, space->thumbnail_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, THUMB_FBO_W, THUMB_FBO_H,
+                     0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
+
+    // --- Render into the FBO ---
+    shaders_bind_fbo(thumb_fbo);
+    glViewport(0, 0, THUMB_FBO_W, THUMB_FBO_H);
+
+    // Clear to a dark background (the Space backdrop color).
+    glClearColor(0.15f, 0.15f, 0.15f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Build a scaled-down orthographic projection. This maps the full screen
+    // coordinate range (0..root_w, 0..root_h) into the tiny FBO. Any window
+    // drawn at its real screen coordinates will automatically appear scaled.
+    float thumb_proj[16];
+    shaders_ortho(thumb_proj,
+                  0.0f, (float)wm->root_w,    // left, right (full screen width)
+                  (float)wm->root_h, 0.0f,    // bottom, top (flipped Y for GL)
+                  -1.0f, 1.0f);               // near, far (2D compositing)
+
+    // Draw each window that belongs to this Space.
+    for (int i = 0; i < space->window_count; i++) {
+        // Find the Client struct for this window so we can get its position.
+        Client *c = wm_find_client(wm, space->windows[i]);
+        if (!c) continue;
+
+        // Look up the window's GL texture from Crystal's texture cache.
+        GLuint tex = crystal_get_window_texture_id(c->frame);
+        if (tex == 0) tex = crystal_get_window_texture_id(c->client);
+
+        if (tex != 0) {
+            // Draw the window texture at its real screen coordinates.
+            // The orthographic projection handles the scaling automatically.
+            shaders_use(progs->basic);
+            shaders_set_projection(progs->basic, thumb_proj);
+            shaders_set_texture(progs->basic, 0);
+            shaders_set_alpha(progs->basic, 1.0f);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            shaders_draw_quad((float)c->x, (float)c->y,
+                              (float)c->w, (float)c->h);
+        } else {
+            // No texture available — draw a placeholder rectangle.
+            shaders_use(progs->basic);
+            shaders_set_projection(progs->basic, thumb_proj);
+            shaders_set_color(progs->basic, 0.3f, 0.3f, 0.3f, 0.8f);
+            shaders_draw_quad((float)c->x, (float)c->y,
+                              (float)c->w, (float)c->h);
+        }
+    }
+
+    // --- Copy the FBO result into the Space's persistent thumbnail texture ---
+    // We bind the Space's thumbnail texture and copy the FBO's contents into it
+    // using glCopyTexSubImage2D, which reads from the current framebuffer.
+    glBindTexture(GL_TEXTURE_2D, space->thumbnail_tex);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, THUMB_FBO_W, THUMB_FBO_H);
+
+    // --- Restore normal rendering state ---
+    shaders_unbind_fbo();
+    glViewport(0, 0, wm->root_w, wm->root_h);
+
+    // Mark the thumbnail as up-to-date.
+    space->thumbnail_dirty = false;
+}
+
+// Ensure all Space thumbnails are up to date.
+//
+// Iterates through all Spaces and re-renders the thumbnail for any that
+// have been marked dirty (thumbnail_dirty = true). This is called from
+// mc_enter() and whenever a Space's window list changes.
+static void mc_ensure_thumbnails(AuraWM *wm)
+{
+    for (int i = 0; i < mc.space_count; i++) {
+        if (mc.spaces[i].thumbnail_dirty) {
+            mc_render_space_thumbnail(wm, i);
+        }
+    }
+}
+
+
+// ============================================================================
 //  Per-frame update
 // ============================================================================
 
@@ -434,6 +651,16 @@ bool mc_update(AuraWM *wm)
 
         // Mission Control is fully dismissed — no more rendering needed.
         return false;
+    }
+
+    // --- Handle slide animation completion ---
+    // The slide animation plays when switching between Spaces. It runs
+    // independently of the enter/exit animation.
+    if (slide_anim.active) {
+        double slide_elapsed = now - slide_anim.start_time;
+        if (slide_elapsed >= slide_anim.duration) {
+            slide_anim.active = false;
+        }
     }
 
     // Still animating or fully active — keep rendering.
@@ -502,6 +729,9 @@ static void draw_space_thumbnails(AuraWM *wm, GLuint shader, float *projection,
         // If this Space has a pre-rendered thumbnail texture, draw it inside
         // the border so the user can see a miniaturized version of the desktop.
         if (mc.spaces[i].thumbnail_tex != 0) {
+            shaders_use(shader);
+            shaders_set_projection(shader, projection);
+            shaders_set_texture(shader, 0);
             shaders_set_alpha(shader, alpha);
             glBindTexture(GL_TEXTURE_2D, mc.spaces[i].thumbnail_tex);
             shaders_draw_quad(x + 2.0f, y + 2.0f, thumb_w - 4.0f, thumb_h - 4.0f);
@@ -515,6 +745,8 @@ static void draw_space_thumbnails(AuraWM *wm, GLuint shader, float *projection,
     float plus_h = thumb_h;
 
     // Background for the + button.
+    shaders_use(shader);
+    shaders_set_projection(shader, projection);
     shaders_set_color(shader, 1.0f, 1.0f, 1.0f, 0.1f * ease);
     shaders_draw_quad(plus_x, y, plus_w, plus_h);
 
@@ -578,6 +810,10 @@ void mc_draw(AuraWM *wm, GLuint basic_shader, float *projection)
     // Each window interpolates between its original desktop position and its
     // grid cell position based on the animation progress.
     for (int i = 0; i < mc.tiled_count; i++) {
+        // Skip the window being dragged — we draw it last so it appears on top
+        // of all other windows, giving clear visual feedback during the drag.
+        if (drag.active && drag.past_threshold && i == drag.window_idx) continue;
+
         // Lerp (linear interpolation) between original and target positions.
         // When ease = 0, the window is at its original position.
         // When ease = 1, the window is at its grid cell position.
@@ -604,7 +840,13 @@ void mc_draw(AuraWM *wm, GLuint basic_shader, float *projection)
         // Draw the actual window contents using its GL texture.
         // If the texture is 0 (not yet bound), we draw a placeholder rectangle.
         if (mc.tiled_windows[i].texture != 0) {
-            shaders_set_alpha(basic_shader, 1.0f);
+            // Activate the basic shader and configure it to sample from
+            // texture unit 0 at full opacity. Then bind the window's texture
+            // and draw a quad at the interpolated position.
+            shaders_use(basic_shader);
+            shaders_set_projection(basic_shader, projection);
+            shaders_set_texture(basic_shader, 0);
+            shaders_set_alpha(basic_shader, ease);
             glBindTexture(GL_TEXTURE_2D, mc.tiled_windows[i].texture);
             shaders_draw_quad(x, y, w, h);
         } else {
@@ -620,6 +862,45 @@ void mc_draw(AuraWM *wm, GLuint basic_shader, float *projection)
             shaders_draw_quad(x, y, 1.0f, h);           // Left
             shaders_draw_quad(x + w - 1.0f, y, 1.0f, h); // Right
         }
+    }
+
+    // --- Layer 4: Dragged window ---
+    // If the user is dragging a window to a different Space, draw it on top
+    // of everything else at the cursor position. A slight scale-up and a
+    // semi-transparent blue tint indicate the window is "lifted" from the grid.
+    if (drag.active && drag.past_threshold && drag.window_idx >= 0
+        && drag.window_idx < mc.tiled_count) {
+        int di = drag.window_idx;
+        float dw = mc.tiled_windows[di].target_w * 0.85f;  // Slightly smaller for "lifted" look
+        float dh = mc.tiled_windows[di].target_h * 0.85f;
+        float dx = drag.current_x - dw / 2.0f;
+        float dy = drag.current_y - dh / 2.0f;
+
+        // Draw a subtle shadow behind the dragged window.
+        shaders_use(basic_shader);
+        shaders_set_projection(basic_shader, projection);
+        shaders_set_color(basic_shader, 0.0f, 0.0f, 0.0f, 0.3f);
+        shaders_draw_quad(dx + 4.0f, dy + 4.0f, dw, dh);
+
+        // Draw the window texture (or placeholder if no texture).
+        if (mc.tiled_windows[di].texture != 0) {
+            shaders_use(basic_shader);
+            shaders_set_projection(basic_shader, projection);
+            shaders_set_texture(basic_shader, 0);
+            shaders_set_alpha(basic_shader, 0.85f);
+            glBindTexture(GL_TEXTURE_2D, mc.tiled_windows[di].texture);
+            shaders_draw_quad(dx, dy, dw, dh);
+        } else {
+            shaders_set_color(basic_shader, 0.2f, 0.2f, 0.2f, 0.7f);
+            shaders_draw_quad(dx, dy, dw, dh);
+        }
+
+        // Blue highlight border on the dragged window.
+        shaders_set_color(basic_shader, 0.22f, 0.46f, 0.84f, 0.7f);
+        shaders_draw_quad(dx, dy, dw, 2.0f);             // Top
+        shaders_draw_quad(dx, dy + dh - 2.0f, dw, 2.0f); // Bottom
+        shaders_draw_quad(dx, dy, 2.0f, dh);             // Left
+        shaders_draw_quad(dx + dw - 2.0f, dy, 2.0f, dh); // Right
     }
 }
 
@@ -656,12 +937,54 @@ bool mc_handle_event(AuraWM *wm, XEvent *ev)
 
     switch (ev->type) {
 
-    // --- Mouse motion: update hover state ---
+    // --- Mouse motion: update hover state and handle drag ---
     case MotionNotify: {
         int mx = ev->xmotion.x;
         int my = ev->xmotion.y;
 
-        // Reset hover state.
+        // --- Drag handling ---
+        // If a drag is in progress, update the dragged window's position and
+        // check which Space thumbnail the cursor is hovering over (so we can
+        // highlight the drop target).
+        if (drag.active) {
+            // Update the dragged window's draw position to follow the cursor.
+            drag.current_x = (float)mx;
+            drag.current_y = (float)my;
+
+            // Check if the cursor has moved far enough from the initial click
+            // to count as a real drag (not just a sloppy click). This prevents
+            // accidental drags when the user just wants to click a window.
+            if (!drag.past_threshold) {
+                int dx = mx - drag.start_x;
+                int dy = my - drag.start_y;
+                if (dx * dx + dy * dy > DRAG_THRESHOLD * DRAG_THRESHOLD) {
+                    drag.past_threshold = true;
+                }
+            }
+
+            // While dragging, check if the cursor is over a Space thumbnail
+            // so we can highlight it as a potential drop target.
+            mc.hover_space = -1;
+            if (my >= 10 && my <= 70) {
+                float thumb_w = 100.0f;
+                float gap     = 10.0f;
+                float total_w = (float)mc.space_count * (thumb_w + gap) - gap;
+                float start_x = ((float)wm->root_w - total_w) / 2.0f;
+
+                for (int i = 0; i < mc.space_count; i++) {
+                    float sx = start_x + (float)i * (thumb_w + gap);
+                    if ((float)mx >= sx && (float)mx <= sx + thumb_w) {
+                        mc.hover_space = i;
+                        break;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        // --- Normal hover tracking (no drag active) ---
+        // Reset hover state each frame and re-check what's under the cursor.
         mc.hover_window = -1;
         mc.hover_space  = -1;
 
@@ -709,12 +1032,13 @@ bool mc_handle_event(AuraWM *wm, XEvent *ev)
         return true;  // Event consumed
     }
 
-    // --- Mouse click: take action based on what was clicked ---
+    // --- Mouse button press: start a drag or handle Space/button clicks ---
     case ButtonPress: {
         int mx = ev->xbutton.x;
         int my = ev->xbutton.y;
 
         // Did the user click on a Space thumbnail?
+        // Space thumbnails are in the top row (y = 10 to y = 70).
         if (my >= 10 && my <= 70) {
             float thumb_w = 100.0f;
             float gap     = 10.0f;
@@ -734,19 +1058,23 @@ bool mc_handle_event(AuraWM *wm, XEvent *ev)
                 }
             }
 
-            // Check the "+" button.
+            // Check the "+" button — adds a new Space (virtual desktop).
             float plus_x = start_x + (float)mc.space_count * (thumb_w + gap);
             float plus_w = 30.0f;
             if ((float)mx >= plus_x && (float)mx <= plus_x + plus_w) {
                 mc_add_space(wm);
-                // Re-draw but don't exit — the user might want to drag
-                // windows to the new Space.
+                // Stay in Mission Control so the user can drag windows
+                // to the newly created Space.
                 return true;
             }
         }
 
         // Did the user click on a tiled window?
-        // Check in reverse order (top-most first, matching draw order).
+        // Instead of immediately exiting, we start a drag operation. If the
+        // user releases the mouse without moving past the threshold, we treat
+        // it as a click (focus the window and exit). If they drag past the
+        // threshold, the window follows the cursor and can be dropped on a
+        // Space thumbnail.
         for (int i = mc.tiled_count - 1; i >= 0; i--) {
             float wx = mc.tiled_windows[i].target_x;
             float wy = mc.tiled_windows[i].target_y;
@@ -755,8 +1083,20 @@ bool mc_handle_event(AuraWM *wm, XEvent *ev)
 
             if ((float)mx >= wx && (float)mx <= wx + ww &&
                 (float)my >= wy && (float)my <= wy + wh) {
-                // Focus this window and exit Mission Control.
-                mc_exit(wm, mc.tiled_windows[i].xwin);
+                // Begin tracking a potential drag on this window.
+                drag.active         = true;
+                drag.window_idx     = i;
+                drag.start_x        = mx;
+                drag.start_y        = my;
+                drag.current_x      = (float)mx;
+                drag.current_y      = (float)my;
+                drag.past_threshold = false;
+
+                // Record the offset from the cursor to the window's center
+                // so the window doesn't jump when the drag starts.
+                drag.offset_x = (float)mx - (wx + ww / 2.0f);
+                drag.offset_y = (float)my - (wy + wh / 2.0f);
+
                 return true;
             }
         }
@@ -767,13 +1107,86 @@ bool mc_handle_event(AuraWM *wm, XEvent *ev)
         return true;
     }
 
+    // --- Mouse button release: complete a drag or treat as a click ---
+    case ButtonRelease: {
+        int mx = ev->xbutton.x;
+        int my = ev->xbutton.y;
+
+        if (drag.active) {
+            int dragged_idx = drag.window_idx;
+            bool was_real_drag = drag.past_threshold;
+
+            // End the drag operation.
+            drag.active = false;
+            drag.past_threshold = false;
+
+            if (was_real_drag) {
+                // The user completed a real drag (moved past the threshold).
+                // Check if they released over a Space thumbnail — if so, move
+                // the window to that Space.
+                if (my >= 10 && my <= 70) {
+                    float thumb_w = 100.0f;
+                    float gap     = 10.0f;
+                    float total_w = (float)mc.space_count * (thumb_w + gap) - gap;
+                    float start_x = ((float)wm->root_w - total_w) / 2.0f;
+
+                    for (int i = 0; i < mc.space_count; i++) {
+                        float sx = start_x + (float)i * (thumb_w + gap);
+                        if ((float)mx >= sx && (float)mx <= sx + thumb_w) {
+                            // Move the dragged window to this Space.
+                            Window win = mc.tiled_windows[dragged_idx].xwin;
+                            mc_move_window_to_space(wm, win, mc.spaces[i].id);
+
+                            // Mark both the source and destination Space
+                            // thumbnails as dirty so they get re-rendered.
+                            mc.spaces[mc.current_space].thumbnail_dirty = true;
+                            mc.spaces[i].thumbnail_dirty = true;
+                            mc_ensure_thumbnails(wm);
+
+                            // Remove the window from the tiled layout since
+                            // it no longer belongs to the current Space.
+                            for (int j = dragged_idx; j < mc.tiled_count - 1; j++) {
+                                mc.tiled_windows[j] = mc.tiled_windows[j + 1];
+                            }
+                            mc.tiled_count--;
+
+                            // Recompute the grid layout to fill the gap.
+                            compute_tiled_layout(&mc, wm->root_w, wm->root_h);
+
+                            fprintf(stderr, "[Mission Control] Dragged window "
+                                    "0x%lx to %s\n",
+                                    (unsigned long)win, mc.spaces[i].name);
+                            return true;
+                        }
+                    }
+                }
+
+                // Released over empty space or outside a thumbnail — the
+                // window snaps back to its original grid position (which
+                // happens automatically since we stop drawing it at the
+                // drag position).
+                return true;
+            } else {
+                // The user didn't move past the threshold — treat as a click.
+                // Focus the clicked window and exit Mission Control.
+                if (dragged_idx >= 0 && dragged_idx < mc.tiled_count) {
+                    mc_exit(wm, mc.tiled_windows[dragged_idx].xwin);
+                }
+                return true;
+            }
+        }
+
+        return true;  // Consume the event
+    }
+
     // --- Keyboard: Escape to exit, arrow keys to cycle Spaces ---
     case KeyPress: {
         KeySym key = XLookupKeysym(&ev->xkey, 0);
 
         switch (key) {
         case XK_Escape:
-            // Exit without focusing a specific window.
+            // Cancel any active drag and exit Mission Control.
+            drag.active = false;
             mc_exit(wm, None);
             return true;
 
@@ -1010,8 +1423,8 @@ void mc_remove_space(AuraWM *wm, int space_id)
 // Switch to a different virtual desktop (Space).
 //
 // This hides all windows on the current Space and shows all windows on the
-// target Space. The transition is immediate (no slide animation yet — that
-// will be added in a future phase using ANIM_SLIDE_LEFT / ANIM_SLIDE_RIGHT).
+// target Space. A horizontal slide animation plays during the transition
+// (windows slide left or right depending on the direction of the switch).
 //
 // space_id: the unique ID of the Space to switch to.
 void mc_switch_space(AuraWM *wm, int space_id)
@@ -1028,6 +1441,20 @@ void mc_switch_space(AuraWM *wm, int space_id)
 
     fprintf(stderr, "[Mission Control] Switching from %s to %s\n",
             mc.spaces[mc.current_space].name, mc.spaces[idx].name);
+
+    // Start a slide animation for the transition.
+    // The direction determines whether windows slide left or right:
+    //   - Moving to a higher-index Space: slide left (windows move left, new ones enter from right).
+    //   - Moving to a lower-index Space: slide right (windows move right, new ones enter from left).
+    slide_anim.active     = true;
+    slide_anim.start_time = get_time();
+    slide_anim.duration   = 0.3;  // 300ms — matches the enter/exit animation speed
+    slide_anim.direction  = (idx > mc.current_space) ? -1.0f : 1.0f;
+
+    // Mark the outgoing Space's thumbnail as dirty so it gets refreshed
+    // the next time Mission Control is opened (its window layout may have
+    // changed since the last render).
+    mc.spaces[mc.current_space].thumbnail_dirty = true;
 
     // Hide windows on the old Space.
     unmap_space_windows(wm, mc.current_space);

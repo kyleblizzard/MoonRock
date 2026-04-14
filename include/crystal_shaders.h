@@ -68,6 +68,8 @@ typedef struct {
     GLuint shadow;      // Shadow rendering (alpha-only texture)
     GLuint solid;       // Solid color (no texture, just color + alpha)
     GLuint genie;       // Genie mesh distortion (vertex shader warps mesh)
+    GLuint desaturate;  // Desaturation effect (grayscale blend)
+    GLuint tint;        // Color tint overlay
 } ShaderPrograms;
 
 
@@ -186,6 +188,23 @@ void shaders_set_genie_progress(GLuint program, float t);
 // Set the target position where the window minimizes to (the dock icon).
 // The vertex shader funnels the bottom of the window toward this point.
 void shaders_set_genie_target(GLuint program, float target_x, float target_y);
+
+
+// ============================================================================
+//  Desaturate / Tint uniform setters
+// ============================================================================
+//
+// These uniforms control the desaturate and tint fragment shaders. Both use
+// a "u_amount" uniform that blends between the original image and the effect
+// (0.0 = no effect, 1.0 = full effect). The tint shader also takes a color.
+
+// Set the effect amount for the desaturate or tint shader.
+// 0.0 = no effect (original image), 1.0 = full effect.
+void shaders_set_amount(GLuint program, float amount);
+
+// Set the tint color (RGBA) for the tint shader.
+// r, g, b: color channels 0.0..1.0, a: alpha (usually 1.0).
+void shaders_set_tint_color(GLuint program, float r, float g, float b, float a);
 
 
 // ============================================================================
