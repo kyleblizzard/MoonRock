@@ -339,4 +339,28 @@ bool crystal_is_active(void);
 // The main event loop uses this to route damage events to crystal_handle_event().
 int crystal_get_damage_event_base(void);
 
+
+// ============================================================================
+//  Shader and texture accessors
+// ============================================================================
+//
+// These let other Crystal modules (Mission Control, animations, plugins)
+// access the compositor's shader programs and per-frame projection matrix
+// without reaching into the static crystal struct directly.
+
+#include "crystal_shaders.h"
+
+// Get a pointer to Crystal's compiled shader programs.
+// Returns NULL if Crystal is not initialized.
+ShaderPrograms *crystal_get_shaders(void);
+
+// Get the current frame's 4x4 orthographic projection matrix.
+// Returns a pointer to a float[16] in column-major order.
+float *crystal_get_projection(void);
+
+// Look up a window's GL texture handle by its X window ID.
+// Returns the GL texture handle, or 0 if the window isn't tracked.
+// Used by Mission Control to render window thumbnails in the overview.
+GLuint crystal_get_window_texture_id(Window xwin);
+
 #endif // AURA_CRYSTAL_H

@@ -32,6 +32,7 @@
 
 #define _GNU_SOURCE  // Needed for M_PI from <math.h>
 #include "crystal.h"
+#include "crystal_shaders.h"
 #include "ewmh.h"
 
 // Forward declaration removed — compositor.c is no longer linked.
@@ -188,6 +189,16 @@ static struct {
     // ── Desktop background color ──
     // Cleared to this color each frame. Dark blue-gray by default.
     float bg_r, bg_g, bg_b;
+
+    // ── Shader pipeline (Phase 3) ──
+    // GLSL shader programs for all rendering. Replaces fixed-function
+    // glBegin/glEnd with modern VBO + shader draws.
+    ShaderPrograms shaders;
+
+    // ── Per-frame projection matrix ──
+    // 4x4 orthographic projection computed once per frame and passed to
+    // every shader program as the u_projection uniform.
+    float projection[16];
 } crystal;
 
 // ────────────────────────────────────────────────────────────────────────
@@ -627,6 +638,38 @@ bool crystal_init(AuraWM *wm)
     // Disable depth testing — we don't need it for 2D compositing. We
     // handle z-order ourselves by drawing back-to-front.
     glDisable(GL_DEPTH_TEST);
+
+    // ── Step 15: Initialize the shader pipeline ──
+    //
+    // Load and compile all GLSL shader programs (basic, blur, shadow, genie).
+    // This replaces the fixed-function glBegin/glEnd pipeline with modern
+    // programmable shaders that run on the GPU. Every visual effect Crystal
+    // renders flows through these shader programs.
+    //
+    // shader_dir can be NULL — embedded fallback shaders are compiled into
+    // crystal_shaders.c so the compositor works even without shader files.
+    if (!shaders_init(&crystal.shaders, NULL)) {
+        fprintf(stderr, "[crystal] WARNING: Shader initialization failed, "
+                "falling back to fixed-function GL\n");
+        // We continue anyway — the compositor can still work with shaders.basic=0
+        // by falling back to fixed-function for individual draw calls.
+    } else {
+        fprintf(stderr, "[crystal] Shader pipeline initialized "
+                "(basic=%u, blur_h=%u, blur_v=%u, shadow=%u)\n",
+                crystal.shaders.basic, crystal.shaders.blur_h,
+                crystal.shaders.blur_v, crystal.shaders.shadow);
+    }
+
+    // Create the VBO/VAO for quad rendering. This is a single unit quad (0..1)
+    // that gets scaled and positioned by the model matrix uniform. All windows,
+    // shadows, and effects are drawn as quads through this one VBO.
+    shaders_init_quad_vbo();
+
+    // Build the initial orthographic projection matrix
+    shaders_ortho(crystal.projection,
+                  0, (float)crystal.root_w,
+                  (float)crystal.root_h, 0,
+                  -1.0f, 1.0f);
 
     // Mark Crystal as active
     crystal.active = true;
@@ -1500,36 +1543,36 @@ static void draw_window_shadow(struct WindowTexture *wt, bool focused)
     float sx = (float)(chrome_x - pad);
     float sy = (float)(chrome_y - pad + SHADOW_Y_OFFSET);
 
-    // Enable texturing and bind our cached shadow texture
-    glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, wt->shadow_tex);
-
-    // Set color to white — the actual shadow color and opacity are baked
-    // into the texture's alpha channel. With pre-multiplied alpha and our
-    // blend mode (GL_ONE, GL_ONE_MINUS_SRC_ALPHA), white color means the
-    // texture pixels are used as-is.
-    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-
-    // Draw a textured quad covering the shadow area.
-    // Texture coords (0,0)→(1,1) map the full shadow texture onto the quad.
-    glBegin(GL_QUADS);
-        glTexCoord2f(0.0f, 0.0f);
-        glVertex2f(sx, sy);
-
-        glTexCoord2f(1.0f, 0.0f);
-        glVertex2f(sx + (float)wt->shadow_tex_w, sy);
-
-        glTexCoord2f(1.0f, 1.0f);
-        glVertex2f(sx + (float)wt->shadow_tex_w, sy + (float)wt->shadow_tex_h);
-
-        glTexCoord2f(0.0f, 1.0f);
-        glVertex2f(sx, sy + (float)wt->shadow_tex_h);
-    glEnd();
-
-    // Unbind the shadow texture and disable texturing so subsequent
-    // rendering code starts from a clean state.
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glDisable(GL_TEXTURE_2D);
+    // ── Draw the shadow quad using the shader pipeline ──
+    // Activate the shadow shader which reads the alpha channel from the
+    // shadow texture and outputs premultiplied black with that alpha.
+    // The u_alpha uniform is set to 1.0 because shadow intensity is
+    // already baked into the cached texture.
+    if (crystal.shaders.shadow) {
+        shaders_use(crystal.shaders.shadow);
+        shaders_set_projection(crystal.shaders.shadow, crystal.projection);
+        shaders_set_texture(crystal.shaders.shadow, 0);
+        shaders_set_alpha(crystal.shaders.shadow, 1.0f);
+        glBindTexture(GL_TEXTURE_2D, wt->shadow_tex);
+        shaders_draw_quad(sx, sy,
+                          (float)wt->shadow_tex_w, (float)wt->shadow_tex_h);
+    } else {
+        // Fallback: fixed-function GL if shadow shader failed to compile
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, wt->shadow_tex);
+        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+        glBegin(GL_QUADS);
+            glTexCoord2f(0.0f, 0.0f);
+            glVertex2f(sx, sy);
+            glTexCoord2f(1.0f, 0.0f);
+            glVertex2f(sx + (float)wt->shadow_tex_w, sy);
+            glTexCoord2f(1.0f, 1.0f);
+            glVertex2f(sx + (float)wt->shadow_tex_w, sy + (float)wt->shadow_tex_h);
+            glTexCoord2f(0.0f, 1.0f);
+            glVertex2f(sx, sy + (float)wt->shadow_tex_h);
+        glEnd();
+        glDisable(GL_TEXTURE_2D);
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -1559,21 +1602,19 @@ void crystal_composite(AuraWM *wm)
                           crystal.gl_context);
 
     // ── Step 1: Clear the screen ──
-    // GL_COLOR_BUFFER_BIT tells OpenGL to fill the entire framebuffer with
-    // the clear color (set in crystal_init). This erases the previous frame.
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // ── Step 2: Set up 2D projection ──
-    // Reset the projection matrix each frame (in case the screen was resized).
-    // glOrtho maps (0,0) to the top-left corner and (root_w, root_h) to the
-    // bottom-right, matching X11's coordinate convention.
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(0, crystal.root_w, crystal.root_h, 0, -1, 1);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
+    // ── Step 2: Update the projection matrix ──
+    // Rebuild the orthographic projection each frame in case the screen was
+    // resized. This maps pixel coordinates to OpenGL clip space:
+    //   (0,0) = top-left, (root_w, root_h) = bottom-right.
+    shaders_ortho(crystal.projection,
+                  0, (float)crystal.root_w,
+                  (float)crystal.root_h, 0,
+                  -1.0f, 1.0f);
 
     // ── Step 3: Enable blending for transparent windows ──
+    // Premultiplied alpha: src * 1 + dst * (1 - src_alpha)
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -1651,44 +1692,40 @@ void crystal_composite(AuraWM *wm)
             }
 
             // ── Draw the window contents ──
-            // Bind the window's texture and draw a quad that covers the
-            // window's screen rectangle.
-            glEnable(GL_TEXTURE_2D);
-            glBindTexture(GL_TEXTURE_2D, wt->texture);
-
-            // Reset color to white so the texture colors aren't modified.
-            // When GL_TEXTURE_2D is enabled, the final pixel color is:
-            //   texture_color * glColor
-            // With glColor = (1,1,1,1), the texture appears as-is.
-            glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-
-            // Draw a textured quad.
-            // glTexCoord2f sets the texture coordinate for the next vertex.
-            // Texture coordinates go from (0,0) at the top-left of the image
-            // to (1,1) at the bottom-right. By mapping these to the window's
-            // screen rectangle, we stretch the texture to fill the quad.
-            //
-            // Vertices are specified in clockwise order:
-            //   (0,0)──────(1,0)
-            //     │  texture  │
-            //   (0,1)──────(1,1)
-            glBegin(GL_QUADS);
-                glTexCoord2f(0.0f, 0.0f);
-                glVertex2f((float)wt->x, (float)wt->y);                 // Top-left
-
-                glTexCoord2f(1.0f, 0.0f);
-                glVertex2f((float)(wt->x + wt->w), (float)wt->y);      // Top-right
-
-                glTexCoord2f(1.0f, 1.0f);
-                glVertex2f((float)(wt->x + wt->w), (float)(wt->y + wt->h));  // Bottom-right
-
-                glTexCoord2f(0.0f, 1.0f);
-                glVertex2f((float)wt->x, (float)(wt->y + wt->h));       // Bottom-left
-            glEnd();
-
-            glDisable(GL_TEXTURE_2D);
+            // Activate the basic shader program, which samples the window's
+            // texture and applies alpha blending. Then draw a quad covering
+            // the window's screen rectangle using the VBO pipeline.
+            if (crystal.shaders.basic) {
+                shaders_use(crystal.shaders.basic);
+                shaders_set_projection(crystal.shaders.basic, crystal.projection);
+                shaders_set_texture(crystal.shaders.basic, 0);
+                shaders_set_alpha(crystal.shaders.basic, 1.0f);
+                glBindTexture(GL_TEXTURE_2D, wt->texture);
+                shaders_draw_quad((float)wt->x, (float)wt->y,
+                                  (float)wt->w, (float)wt->h);
+            } else {
+                // Fallback: fixed-function GL if shaders failed to compile.
+                // This keeps the compositor functional even without shaders.
+                glEnable(GL_TEXTURE_2D);
+                glBindTexture(GL_TEXTURE_2D, wt->texture);
+                glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+                glBegin(GL_QUADS);
+                    glTexCoord2f(0.0f, 0.0f);
+                    glVertex2f((float)wt->x, (float)wt->y);
+                    glTexCoord2f(1.0f, 0.0f);
+                    glVertex2f((float)(wt->x + wt->w), (float)wt->y);
+                    glTexCoord2f(1.0f, 1.0f);
+                    glVertex2f((float)(wt->x + wt->w), (float)(wt->y + wt->h));
+                    glTexCoord2f(0.0f, 1.0f);
+                    glVertex2f((float)wt->x, (float)(wt->y + wt->h));
+                glEnd();
+                glDisable(GL_TEXTURE_2D);
+            }
         }
     }
+
+    // Deactivate shaders before buffer swap to leave GL in a clean state
+    shaders_use_none();
 
     // ── Step 5: Swap buffers ──
     // We've been drawing to the "back buffer" (an invisible off-screen surface).
@@ -1876,6 +1913,12 @@ static void crystal_screen_resized(AuraWM *wm)
     // (0, 0) is the bottom-left corner; (root_w, root_h) is the top-right.
     glViewport(0, 0, crystal.root_w, crystal.root_h);
 
+    // Rebuild the orthographic projection matrix for the new dimensions
+    shaders_ortho(crystal.projection,
+                  0, (float)crystal.root_w,
+                  (float)crystal.root_h, 0,
+                  -1.0f, 1.0f);
+
     fprintf(stderr, "[crystal] Screen resized to %dx%d\n",
             crystal.root_w, crystal.root_h);
 }
@@ -1889,6 +1932,10 @@ void crystal_shutdown(AuraWM *wm)
     if (!wm || !wm->dpy) return;
 
     fprintf(stderr, "[crystal] Shutting down Crystal Compositor...\n");
+
+    // Destroy shader programs and VBO before releasing GL context
+    shaders_shutdown(&crystal.shaders);
+    shaders_shutdown_quad_vbo();
 
     // Release all tracked window textures
     for (int i = 0; i < crystal.window_count; i++) {
@@ -1974,4 +2021,35 @@ bool crystal_animation_active(AuraWM *wm)
     // at the refresh rate to advance the animation smoothly.
     (void)wm;
     return false;
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// SECTION: Shader and texture accessors
+// ────────────────────────────────────────────────────────────────────────
+//
+// These let other Crystal modules (Mission Control, animations, plugins)
+// access the shader programs and window textures without reaching into
+// the static crystal struct directly.
+
+ShaderPrograms *crystal_get_shaders(void)
+{
+    return &crystal.shaders;
+}
+
+float *crystal_get_projection(void)
+{
+    return crystal.projection;
+}
+
+// Look up a window's GL texture handle by its X window ID.
+// Returns the texture handle, or 0 if the window isn't tracked.
+// This is used by Mission Control to draw window thumbnails.
+GLuint crystal_get_window_texture_id(Window xwin)
+{
+    struct WindowTexture *wt = find_window_texture(xwin);
+    if (wt && wt->texture) {
+        return wt->texture;
+    }
+    return 0;
 }
