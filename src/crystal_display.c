@@ -784,8 +784,17 @@ void display_disable_direct_scanout(void)
     //
     // CompositeRedirectManual must match the mode used in both the original
     // redirect (in crystal.c) and the unredirect (in enable_direct_scanout).
-    XCompositeRedirectWindow(display_dpy, direct_scanout_win,
-                             CompositeRedirectManual);
+    //
+    // Check that the window still exists before redirecting — it may have
+    // been destroyed between the scanout enable and this disable call.
+    XWindowAttributes wa;
+    if (XGetWindowAttributes(display_dpy, direct_scanout_win, &wa)) {
+        XCompositeRedirectWindow(display_dpy, direct_scanout_win,
+                                 CompositeRedirectManual);
+    } else {
+        fprintf(stderr, "[crystal_display] Scanout window 0x%lx already destroyed, "
+                "skipping redirect\n", (unsigned long)direct_scanout_win);
+    }
 
     fprintf(stderr, "[display] Direct scanout disabled for window 0x%lx — "
             "resuming compositing\n", (unsigned long)direct_scanout_win);

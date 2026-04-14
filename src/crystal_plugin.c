@@ -464,20 +464,20 @@ bool plugin_load_theme(const char *path)
             else if (strcmp(key, "color_inactive") == 0)
                 parse_rgb(value, current_theme.border_color_inactive);
             else if (strcmp(key, "width") == 0)
-                current_theme.border_width = (float)atof(value);
+                current_theme.border_width = clamp_float((float)atof(value), 0.0f, 20.0f, 1.0f);
             else if (strcmp(key, "corner_radius") == 0)
-                current_theme.corner_radius = (float)atof(value);
+                current_theme.corner_radius = clamp_float((float)atof(value), 0.0f, 50.0f, 5.0f);
         }
         else if (strcmp(section, "Shadow") == 0) {
             // [Shadow] section — drop shadow parameters
             if (strcmp(key, "radius") == 0)
-                current_theme.shadow_radius = (float)atof(value);
+                current_theme.shadow_radius = clamp_float((float)atof(value), 0.0f, 100.0f, 22.0f);
             else if (strcmp(key, "alpha_active") == 0)
-                current_theme.shadow_alpha_active = (float)atof(value);
+                current_theme.shadow_alpha_active = clamp_float((float)atof(value), 0.0f, 1.0f, 0.45f);
             else if (strcmp(key, "alpha_inactive") == 0)
-                current_theme.shadow_alpha_inactive = (float)atof(value);
+                current_theme.shadow_alpha_inactive = clamp_float((float)atof(value), 0.0f, 1.0f, 0.22f);
             else if (strcmp(key, "y_offset") == 0)
-                current_theme.shadow_y_offset = (float)atof(value);
+                current_theme.shadow_y_offset = clamp_float((float)atof(value), -50.0f, 50.0f, 3.0f);
         }
         else if (strcmp(section, "Colors") == 0) {
             // [Colors] section — UI accent colors
@@ -500,13 +500,13 @@ bool plugin_load_theme(const char *path)
             // [Effects] section — blur and transparency settings for frosted
             // glass panels and inactive window dimming
             if (strcmp(key, "blur_behind_radius") == 0)
-                current_theme.blur_behind_radius = (float)atof(value);
+                current_theme.blur_behind_radius = clamp_float((float)atof(value), 0.0f, 100.0f, 12.0f);
             else if (strcmp(key, "dock_blur_radius") == 0)
-                current_theme.dock_blur_radius = (float)atof(value);
+                current_theme.dock_blur_radius = clamp_float((float)atof(value), 0.0f, 100.0f, 20.0f);
             else if (strcmp(key, "menubar_blur_radius") == 0)
-                current_theme.menubar_blur_radius = (float)atof(value);
+                current_theme.menubar_blur_radius = clamp_float((float)atof(value), 0.0f, 100.0f, 15.0f);
             else if (strcmp(key, "window_opacity_inactive") == 0)
-                current_theme.window_opacity_inactive = (float)atof(value);
+                current_theme.window_opacity_inactive = clamp_float((float)atof(value), 0.0f, 1.0f, 0.85f);
         }
         else if (strcmp(section, "Animation") == 0) {
             // [Animation] section — minimize effect style and global speed.
@@ -515,7 +515,7 @@ bool plugin_load_theme(const char *path)
             if (strcmp(key, "minimize_style") == 0)
                 current_theme.minimize_animation = atoi(value);
             else if (strcmp(key, "speed") == 0)
-                current_theme.animation_speed = (float)atof(value);
+                current_theme.animation_speed = clamp_float((float)atof(value), 0.1f, 10.0f, 1.0f);
         }
         else if (strcmp(section, "Buttons") == 0) {
             // [Buttons] section — title bar button visual style.
@@ -527,16 +527,16 @@ bool plugin_load_theme(const char *path)
             // [Dock] section — dock shelf appearance: opacity, icon
             // magnification on hover, and whether to draw reflections
             if (strcmp(key, "opacity") == 0)
-                current_theme.dock_opacity = (float)atof(value);
+                current_theme.dock_opacity = clamp_float((float)atof(value), 0.0f, 1.0f, 0.85f);
             else if (strcmp(key, "magnification") == 0)
-                current_theme.dock_magnification = (float)atof(value);
+                current_theme.dock_magnification = clamp_float((float)atof(value), 1.0f, 5.0f, 2.0f);
             else if (strcmp(key, "reflection") == 0)
                 current_theme.dock_reflection = (atoi(value) != 0);
         }
         else if (strcmp(section, "MenuBar") == 0) {
             // [MenuBar] section — menu bar background opacity
             if (strcmp(key, "opacity") == 0)
-                current_theme.menubar_opacity = (float)atof(value);
+                current_theme.menubar_opacity = clamp_float((float)atof(value), 0.0f, 1.0f, 0.9f);
         }
     }
 
@@ -843,7 +843,7 @@ static void parse_window_rule_flags(const char *flags_str, WindowRule *rule)
         else if (strcmp(flag, "fullscreen_direct") == 0)
             rule->fullscreen_direct = true;
         else if (strncmp(flag, "opacity=", 8) == 0)
-            rule->opacity = (float)atof(flag + 8);
+            rule->opacity = clamp_float((float)atof(flag + 8), 0.0f, 1.0f, 1.0f);
         else if (strncmp(flag, "space=", 6) == 0)
             rule->target_space = atoi(flag + 6);
 
