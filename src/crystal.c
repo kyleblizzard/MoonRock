@@ -32,6 +32,30 @@
 
 #define _GNU_SOURCE  // Needed for M_PI from <math.h>
 #include "crystal.h"
+
+// ── Custom X11 error handler ──
+// X11's default error handler calls exit(), which kills the compositor if a
+// window is destroyed between our check and our X call (a common race).
+// This handler catches the expected transient errors (BadWindow, BadMatch,
+// BadDrawable) and logs them instead of crashing.
+static int crystal_x11_error_handler(Display *dpy, XErrorEvent *event)
+{
+    (void)dpy;  // unused — we just log and continue
+
+    // BadWindow (3) and BadMatch (8) are expected during window lifecycle
+    // when windows are destroyed between our check and our X call.
+    // BadDrawable (9) can occur for the same reason with pixmaps.
+    // Log them but don't crash.
+    if (event->error_code == BadWindow || event->error_code == BadMatch ||
+        event->error_code == BadDrawable) {
+        fprintf(stderr, "[crystal] X11 error (ignored): code=%d, xid=0x%lx, op=%d\n",
+                event->error_code, event->resourceid, event->request_code);
+        return 0;
+    }
+    fprintf(stderr, "[crystal] X11 error: code=%d, xid=0x%lx, op=%d\n",
+            event->error_code, event->resourceid, event->request_code);
+    return 0;
+}
 #include "crystal_shaders.h"
 #include "crystal_display.h"
 #include "crystal_plugin.h"
@@ -562,6 +586,13 @@ bool crystal_init(AuraWM *wm)
         fprintf(stderr, "[crystal] WARNING: VSync not available "
                 "(may see tearing)\n");
     }
+
+    // ── Step 10.5: Install custom X11 error handler ──
+    // Must be set before any X calls that could race with window destruction
+    // (especially XComposite redirect below). Without this, a BadWindow during
+    // normal window lifecycle would invoke the default handler and exit().
+    XSetErrorHandler(crystal_x11_error_handler);
+    fprintf(stderr, "[crystal] Custom X11 error handler installed\n");
 
     // ── Step 11: Set up XComposite redirection ──
     // Manual mode: Crystal is responsible for compositing all window contents
@@ -1335,6 +1366,14 @@ static void generate_shadow_texture(struct WindowTexture *wt, bool focused)
     int pad = radius * 2;
     int shadow_w = chrome_w + pad * 2;
     int shadow_h = chrome_h + pad * 2;
+
+    // Prevent integer overflow and unreasonable GPU allocations.
+    // 16384 is a safe upper bound for texture dimensions on most GPUs.
+    if (shadow_w <= 0 || shadow_h <= 0 || shadow_w > 16384 || shadow_h > 16384) {
+        fprintf(stderr, "[crystal] Shadow dimensions out of range: %dx%d\n",
+                shadow_w, shadow_h);
+        return;
+    }
 
     // ── Step 1: Create the shadow shape ──
     // Allocate a single-channel (grayscale) buffer. Start with all zeros

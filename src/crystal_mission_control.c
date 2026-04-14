@@ -403,6 +403,10 @@ void mc_exit(AuraWM *wm, Window focus_window)
         }
     }
 
+    // Clear drag state so we don't carry stale references into the next
+    // Mission Control activation.
+    memset(&drag, 0, sizeof(drag));
+
     (void)wm;  // Suppress unused warning in case no focus logic runs
 }
 
@@ -1092,10 +1096,10 @@ bool mc_handle_event(AuraWM *wm, XEvent *ev)
                 drag.current_y      = (float)my;
                 drag.past_threshold = false;
 
-                // Record the offset from the cursor to the window's center
-                // so the window doesn't jump when the drag starts.
-                drag.offset_x = (float)mx - (wx + ww / 2.0f);
-                drag.offset_y = (float)my - (wy + wh / 2.0f);
+                // Record the offset from the cursor to the window's top-left
+                // corner so the window doesn't jump when the drag starts.
+                drag.offset_x = (float)mx - wx;
+                drag.offset_y = (float)my - wy;
 
                 return true;
             }
@@ -1537,4 +1541,31 @@ void mc_move_window_to_space(AuraWM *wm, Window win, int space_id)
 
     fprintf(stderr, "[Mission Control] Moved window 0x%lx to %s\n",
             (unsigned long)win, dest->name);
+}
+
+
+// ============================================================================
+//  Window lifecycle notifications
+// ============================================================================
+
+// Notify Mission Control that a window has been unmapped (destroyed or hidden).
+//
+// If Mission Control is active and the unmapped window is the one currently
+// being dragged, we must cancel the drag immediately. Otherwise the drag state
+// holds a stale index into tiled_windows[] which can cause out-of-bounds access
+// if the array is later modified (e.g., by compute_tiled_layout).
+void mc_notify_window_unmapped(Window win)
+{
+    if (!mc.active || !drag.active) return;
+
+    // Check if the dragged window was the one that got destroyed.
+    if (drag.window_idx >= 0 && drag.window_idx < mc.tiled_count) {
+        // Compare the tiled window's X window ID against the unmapped one.
+        if (mc.tiled_windows[drag.window_idx].xwin == win) {
+            fprintf(stderr, "[mc] Dragged window 0x%lx destroyed, cancelling drag\n", win);
+            drag.active = false;
+            drag.past_threshold = false;
+            drag.window_idx = -1;
+        }
+    }
 }

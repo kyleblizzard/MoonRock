@@ -1295,6 +1295,16 @@ void shaders_draw_quad_tc(float x, float y, float w, float h,
 
 GLuint shaders_create_fbo(int width, int height, GLuint *out_texture)
 {
+    // Guard against zero, negative, or absurdly large FBO dimensions.
+    // 8192 is a conservative limit that all modern GPUs support.
+#define MAX_FBO_DIM 8192
+    if (width <= 0 || height <= 0 || width > MAX_FBO_DIM || height > MAX_FBO_DIM) {
+        fprintf(stderr, "[crystal] FBO size out of bounds: %dx%d\n", width, height);
+        if (out_texture) *out_texture = 0;
+        return 0;
+    }
+#undef MAX_FBO_DIM
+
     // An FBO (Framebuffer Object) is an off-screen render target. Instead of
     // drawing to the screen, we can draw into an FBO and capture the result
     // as a texture. This is essential for multi-pass effects like blur:

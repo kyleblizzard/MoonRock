@@ -244,4 +244,16 @@ void mc_switch_space(AuraWM *wm, int space_id);
 // visible.
 void mc_move_window_to_space(AuraWM *wm, Window win, int space_id);
 
+
+// ============================================================================
+//  Window lifecycle notifications
+// ============================================================================
+
+// Notify Mission Control that a window has been unmapped or destroyed.
+//
+// If the unmapped window is currently being dragged, the drag is cancelled
+// immediately to prevent stale index access into tiled_windows[].
+// Call this from the WM's UnmapNotify / DestroyNotify handler.
+void mc_notify_window_unmapped(Window win);
+
 #endif // CRYSTAL_MISSION_CONTROL_H

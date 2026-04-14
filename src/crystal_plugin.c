@@ -230,6 +230,18 @@ static bool parse_rgb(const char *value, float out[3])
 }
 
 
+// ── clamp_float ──
+// Safely clamp a float value to a given range with NaN protection.
+// If the value is NaN (which atof can produce from garbage input), return
+// the fallback default instead.
+static float clamp_float(float val, float min, float max, float fallback) {
+    if (val != val) return fallback;  // NaN check (NaN != NaN is always true)
+    if (val < min) return min;
+    if (val > max) return max;
+    return val;
+}
+
+
 // ============================================================================
 //  Path validation (security)
 // ============================================================================
@@ -1100,6 +1112,10 @@ void plugin_effect_blur(GLuint texture, int x, int y, int w, int h,
 
     // Get the projection matrix so we can set up the shader's coordinate system
     float *projection = crystal_get_projection();
+    if (!projection) {
+        fprintf(stderr, "[plugin] effect_blur: projection not available\n");
+        return;
+    }
 
     // Create two FBOs for the ping-pong blur passes.
     // FBO-A receives the horizontal blur, FBO-B receives the vertical blur.
@@ -1322,6 +1338,10 @@ void plugin_effect_scale(GLuint texture, float scale)
     }
 
     float *projection = crystal_get_projection();
+    if (!projection) {
+        fprintf(stderr, "[plugin] effect_scale: projection not available\n");
+        return;
+    }
 
     // Query the texture dimensions so we know the original size
     int tw = 0, th = 0;
