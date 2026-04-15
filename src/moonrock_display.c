@@ -20,7 +20,7 @@
 //
 // ============================================================================
 
-#define _GNU_SOURCE  // Needed for some POSIX extensions (e.g., setsid)
+// POSIX extensions require _GNU_SOURCE (provided by meson via -D_GNU_SOURCE).
 
 #include "moonrock_display.h"
 #include "wm_compat.h"
@@ -741,7 +741,7 @@ void display_enable_direct_scanout(Window win, Display *dpy)
     //   - Reduced GPU load (MoonRock doesn't need to texture-map this window).
     //
     // CompositeRedirectManual matches the redirect mode we used when setting
-    // up redirection in moonrock.c — the unredirect mode must match the
+    // up redirection in mr.c — the unredirect mode must match the
     // original redirect mode.
     XCompositeUnredirectWindow(dpy, win, CompositeRedirectManual);
 
@@ -783,18 +783,9 @@ void display_disable_direct_scanout(void)
     // on the next frame.
     //
     // CompositeRedirectManual must match the mode used in both the original
-    // redirect (in moonrock.c) and the unredirect (in enable_direct_scanout).
-    //
-    // Check that the window still exists before redirecting — it may have
-    // been destroyed between the scanout enable and this disable call.
-    XWindowAttributes wa;
-    if (XGetWindowAttributes(display_dpy, direct_scanout_win, &wa)) {
-        XCompositeRedirectWindow(display_dpy, direct_scanout_win,
-                                 CompositeRedirectManual);
-    } else {
-        fprintf(stderr, "[moonrock_display] Scanout window 0x%lx already destroyed, "
-                "skipping redirect\n", (unsigned long)direct_scanout_win);
-    }
+    // redirect (in mr.c) and the unredirect (in enable_direct_scanout).
+    XCompositeRedirectWindow(display_dpy, direct_scanout_win,
+                             CompositeRedirectManual);
 
     fprintf(stderr, "[display] Direct scanout disabled for window 0x%lx — "
             "resuming compositing\n", (unsigned long)direct_scanout_win);
@@ -822,7 +813,7 @@ void display_disable_direct_scanout(void)
 //     qualifies. This catches the moment a game goes fullscreen.
 //
 // Returns true if direct scanout is active (compositor should skip rendering).
-bool display_check_direct_scanout(AuraWM *wm)
+bool display_check_direct_scanout(CCWM *wm)
 {
     if (!wm || !wm->dpy) return false;
 

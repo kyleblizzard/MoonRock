@@ -9,7 +9,7 @@
 //
 // This file implements the plugin system, theme engine, hot corners, window
 // rules, configuration file I/O, and the effects API described in
-// mr_plugin.h. See that header for the full documentation of each
+// moonrock_plugin.h. See that header for the full documentation of each
 // public function.
 //
 // Internal structure:
@@ -31,9 +31,7 @@
 //
 // ============================================================================
 
-// _GNU_SOURCE unlocks some POSIX extensions we might need (like strdup on
-// strict C99/C11 compilers). Include it before any system headers.
-#define _GNU_SOURCE
+// POSIX extensions like strdup require _GNU_SOURCE (provided by meson via -D_GNU_SOURCE).
 
 #include "moonrock_plugin.h"
 #include "moonrock_shaders.h"  // Shader programs, FBO management, quad drawing
@@ -65,7 +63,7 @@ typedef struct {
 //
 // These are essentially global variables, but 'static' limits their visibility
 // to this file only. Other .c files cannot access them directly — they go
-// through the public API functions in mr_plugin.h.
+// through the public API functions in moonrock_plugin.h.
 
 // Array of all loaded plugins, and how many are currently loaded
 static LoadedPlugin loaded_plugins[MAX_PLUGINS];
@@ -81,6 +79,22 @@ static int        rule_count = 0;
 // The currently active theme (initialized with defaults in plugin_init)
 static ThemeDefinition current_theme;
 
+// Cached FBOs for blur-behind (see plugin_effect_blur for details).
+// Declared here so plugin_shutdown() can free them.
+//
+// We keep multiple cache slots because blur-behind is called for different-sized
+// panels each frame (e.g., dock 1514x290 and menubar 1920x46). A single-slot
+// cache would thrash between them. 4 slots covers any reasonable panel count.
+#define BLUR_CACHE_SLOTS 4
+
+typedef struct {
+    GLuint fbo_a, tex_a;   // Horizontal blur pass FBO
+    GLuint fbo_b, tex_b;   // Vertical blur pass FBO
+    int    w, h;           // Dimensions this slot was created for (0 = empty)
+} BlurCacheSlot;
+
+static BlurCacheSlot blur_cache[BLUR_CACHE_SLOTS];
+
 
 // ============================================================================
 //  Default theme values
@@ -95,7 +109,7 @@ static void set_default_theme(void)
     memset(&current_theme, 0, sizeof(current_theme));
 
     strncpy(current_theme.name, "Default", sizeof(current_theme.name) - 1);
-    strncpy(current_theme.author, "AuraOS", sizeof(current_theme.author) - 1);
+    strncpy(current_theme.author, "CopiCatOS", sizeof(current_theme.author) - 1);
 
     // Active title bar: light gray gradient (lighter at top, darker at bottom)
     current_theme.titlebar_active_top[0]    = 0.83f;
@@ -123,7 +137,7 @@ static void set_default_theme(void)
     current_theme.border_width  = 1.0f;
     current_theme.corner_radius = 5.0f;
 
-    // Shadow: matches the existing MoonRock defaults (see moonrock.h)
+    // Shadow: matches the existing MoonRock defaults (see mr.h)
     current_theme.shadow_radius         = 22.0f;
     current_theme.shadow_alpha_active   = 0.45f;
     current_theme.shadow_alpha_inactive = 0.22f;
@@ -230,18 +244,6 @@ static bool parse_rgb(const char *value, float out[3])
 }
 
 
-// ── clamp_float ──
-// Safely clamp a float value to a given range with NaN protection.
-// If the value is NaN (which atof can produce from garbage input), return
-// the fallback default instead.
-static float clamp_float(float val, float min, float max, float fallback) {
-    if (val != val) return fallback;  // NaN check (NaN != NaN is always true)
-    if (val < min) return min;
-    if (val > max) return max;
-    return val;
-}
-
-
 // ============================================================================
 //  Path validation (security)
 // ============================================================================
@@ -252,10 +254,10 @@ static float clamp_float(float val, float min, float max, float fallback) {
 // a symlink in the plugin directory points somewhere dangerous.
 //
 // Allowed directories:
-//   ~/.config/aura-wm/          — user configuration files
-//   ~/.local/share/aura-wm/plugins/  — user-installed plugins
-//   /usr/share/aura-wm/         — system-installed plugins and themes
-//   /usr/local/share/aura-wm/   — locally-compiled plugins and themes
+//   ~/.config/cc-wm/          — user configuration files
+//   ~/.local/share/cc-wm/plugins/  — user-installed plugins
+//   /usr/share/cc-wm/         — system-installed plugins and themes
+//   /usr/local/share/cc-wm/   — locally-compiled plugins and themes
 //
 // We also reject world-writable files (chmod o+w) because any user on the
 // system could have tampered with them. For .so files, we additionally verify
@@ -274,17 +276,17 @@ static bool validate_path(const char *path, bool allow_so)
     // Build the user-specific allowed directory paths from $HOME
     const char *home = getenv("HOME");
     char user_config[PATH_MAX], user_plugins[PATH_MAX];
-    snprintf(user_config, sizeof(user_config), "%s/.config/aura-wm/",
+    snprintf(user_config, sizeof(user_config), "%s/.config/cc-wm/",
              home ? home : "/tmp");
-    snprintf(user_plugins, sizeof(user_plugins), "%s/.local/share/aura-wm/plugins/",
+    snprintf(user_plugins, sizeof(user_plugins), "%s/.local/share/cc-wm/plugins/",
              home ? home : "/tmp");
 
     // Check whether the resolved path starts with any of the allowed prefixes.
     // strncmp with the prefix length acts as a "starts with" check.
     bool allowed = (strncmp(resolved, user_config, strlen(user_config)) == 0 ||
                     strncmp(resolved, user_plugins, strlen(user_plugins)) == 0 ||
-                    strncmp(resolved, "/usr/share/aura-wm/", 19) == 0 ||
-                    strncmp(resolved, "/usr/local/share/aura-wm/", 25) == 0);
+                    strncmp(resolved, "/usr/share/cc-wm/", 19) == 0 ||
+                    strncmp(resolved, "/usr/local/share/cc-wm/", 25) == 0);
 
     if (!allowed) {
         fprintf(stderr, "[plugin] SECURITY: path '%s' resolves to '%s' "
@@ -364,6 +366,14 @@ void plugin_shutdown(void)
         fprintf(stderr, "[plugin] Unloaded: %s\n",
                 (p && p->name) ? p->name : "(unknown)");
     }
+
+    // Free all cached blur FBOs — these are held for the compositor's lifetime
+    // to avoid per-frame allocation overhead (see plugin_effect_blur).
+    for (int i = 0; i < BLUR_CACHE_SLOTS; i++) {
+        if (blur_cache[i].fbo_a) shaders_destroy_fbo(blur_cache[i].fbo_a, blur_cache[i].tex_a);
+        if (blur_cache[i].fbo_b) shaders_destroy_fbo(blur_cache[i].fbo_b, blur_cache[i].tex_b);
+    }
+    memset(blur_cache, 0, sizeof(blur_cache));
 
     // Reset all state
     memset(loaded_plugins, 0, sizeof(loaded_plugins));
@@ -464,20 +474,20 @@ bool plugin_load_theme(const char *path)
             else if (strcmp(key, "color_inactive") == 0)
                 parse_rgb(value, current_theme.border_color_inactive);
             else if (strcmp(key, "width") == 0)
-                current_theme.border_width = clamp_float((float)atof(value), 0.0f, 20.0f, 1.0f);
+                current_theme.border_width = (float)atof(value);
             else if (strcmp(key, "corner_radius") == 0)
-                current_theme.corner_radius = clamp_float((float)atof(value), 0.0f, 50.0f, 5.0f);
+                current_theme.corner_radius = (float)atof(value);
         }
         else if (strcmp(section, "Shadow") == 0) {
             // [Shadow] section — drop shadow parameters
             if (strcmp(key, "radius") == 0)
-                current_theme.shadow_radius = clamp_float((float)atof(value), 0.0f, 100.0f, 22.0f);
+                current_theme.shadow_radius = (float)atof(value);
             else if (strcmp(key, "alpha_active") == 0)
-                current_theme.shadow_alpha_active = clamp_float((float)atof(value), 0.0f, 1.0f, 0.45f);
+                current_theme.shadow_alpha_active = (float)atof(value);
             else if (strcmp(key, "alpha_inactive") == 0)
-                current_theme.shadow_alpha_inactive = clamp_float((float)atof(value), 0.0f, 1.0f, 0.22f);
+                current_theme.shadow_alpha_inactive = (float)atof(value);
             else if (strcmp(key, "y_offset") == 0)
-                current_theme.shadow_y_offset = clamp_float((float)atof(value), -50.0f, 50.0f, 3.0f);
+                current_theme.shadow_y_offset = (float)atof(value);
         }
         else if (strcmp(section, "Colors") == 0) {
             // [Colors] section — UI accent colors
@@ -500,13 +510,13 @@ bool plugin_load_theme(const char *path)
             // [Effects] section — blur and transparency settings for frosted
             // glass panels and inactive window dimming
             if (strcmp(key, "blur_behind_radius") == 0)
-                current_theme.blur_behind_radius = clamp_float((float)atof(value), 0.0f, 100.0f, 12.0f);
+                current_theme.blur_behind_radius = (float)atof(value);
             else if (strcmp(key, "dock_blur_radius") == 0)
-                current_theme.dock_blur_radius = clamp_float((float)atof(value), 0.0f, 100.0f, 20.0f);
+                current_theme.dock_blur_radius = (float)atof(value);
             else if (strcmp(key, "menubar_blur_radius") == 0)
-                current_theme.menubar_blur_radius = clamp_float((float)atof(value), 0.0f, 100.0f, 15.0f);
+                current_theme.menubar_blur_radius = (float)atof(value);
             else if (strcmp(key, "window_opacity_inactive") == 0)
-                current_theme.window_opacity_inactive = clamp_float((float)atof(value), 0.0f, 1.0f, 0.85f);
+                current_theme.window_opacity_inactive = (float)atof(value);
         }
         else if (strcmp(section, "Animation") == 0) {
             // [Animation] section — minimize effect style and global speed.
@@ -515,7 +525,7 @@ bool plugin_load_theme(const char *path)
             if (strcmp(key, "minimize_style") == 0)
                 current_theme.minimize_animation = atoi(value);
             else if (strcmp(key, "speed") == 0)
-                current_theme.animation_speed = clamp_float((float)atof(value), 0.1f, 10.0f, 1.0f);
+                current_theme.animation_speed = (float)atof(value);
         }
         else if (strcmp(section, "Buttons") == 0) {
             // [Buttons] section — title bar button visual style.
@@ -527,16 +537,16 @@ bool plugin_load_theme(const char *path)
             // [Dock] section — dock shelf appearance: opacity, icon
             // magnification on hover, and whether to draw reflections
             if (strcmp(key, "opacity") == 0)
-                current_theme.dock_opacity = clamp_float((float)atof(value), 0.0f, 1.0f, 0.85f);
+                current_theme.dock_opacity = (float)atof(value);
             else if (strcmp(key, "magnification") == 0)
-                current_theme.dock_magnification = clamp_float((float)atof(value), 1.0f, 5.0f, 2.0f);
+                current_theme.dock_magnification = (float)atof(value);
             else if (strcmp(key, "reflection") == 0)
                 current_theme.dock_reflection = (atoi(value) != 0);
         }
         else if (strcmp(section, "MenuBar") == 0) {
             // [MenuBar] section — menu bar background opacity
             if (strcmp(key, "opacity") == 0)
-                current_theme.menubar_opacity = clamp_float((float)atof(value), 0.0f, 1.0f, 0.9f);
+                current_theme.menubar_opacity = (float)atof(value);
         }
     }
 
@@ -843,7 +853,7 @@ static void parse_window_rule_flags(const char *flags_str, WindowRule *rule)
         else if (strcmp(flag, "fullscreen_direct") == 0)
             rule->fullscreen_direct = true;
         else if (strncmp(flag, "opacity=", 8) == 0)
-            rule->opacity = clamp_float((float)atof(flag + 8), 0.0f, 1.0f, 1.0f);
+            rule->opacity = (float)atof(flag + 8);
         else if (strncmp(flag, "space=", 6) == 0)
             rule->target_space = atoi(flag + 6);
 
@@ -987,12 +997,12 @@ bool plugin_save_config(const char *path)
             }
             const char *home = getenv("HOME");
             char uc[PATH_MAX], up[PATH_MAX];
-            snprintf(uc, sizeof(uc), "%s/.config/aura-wm", home ? home : "/tmp");
-            snprintf(up, sizeof(up), "%s/.local/share/aura-wm/plugins", home ? home : "/tmp");
+            snprintf(uc, sizeof(uc), "%s/.config/cc-wm", home ? home : "/tmp");
+            snprintf(up, sizeof(up), "%s/.local/share/cc-wm/plugins", home ? home : "/tmp");
             bool ok = (strncmp(resolved_parent, uc, strlen(uc)) == 0 ||
                        strncmp(resolved_parent, up, strlen(up)) == 0 ||
-                       strncmp(resolved_parent, "/usr/share/aura-wm", 18) == 0 ||
-                       strncmp(resolved_parent, "/usr/local/share/aura-wm", 24) == 0);
+                       strncmp(resolved_parent, "/usr/share/cc-wm", 18) == 0 ||
+                       strncmp(resolved_parent, "/usr/local/share/cc-wm", 24) == 0);
             if (!ok) {
                 fprintf(stderr, "[plugin] SECURITY: save path '%s' is outside "
                         "allowed directories\n", path);
@@ -1099,7 +1109,7 @@ void plugin_effect_blur(GLuint texture, int x, int y, int w, int h,
     //
     // Pipeline:
     //   Input texture -> [horizontal blur into FBO-A] -> [vertical blur into FBO-B]
-    //   FBO-B's texture is the final blurred result.
+    //   FBO-B's texture is the final blurred result, drawn back to the screen.
 
     if (radius <= 0.0f) return;  // No blur to apply
 
@@ -1112,27 +1122,66 @@ void plugin_effect_blur(GLuint texture, int x, int y, int w, int h,
 
     // Get the projection matrix so we can set up the shader's coordinate system
     float *projection = mr_get_projection();
-    if (!projection) {
-        fprintf(stderr, "[plugin] effect_blur: projection not available\n");
-        return;
+
+    // ── Save the current viewport ──
+    // We are about to change the viewport for the FBO render passes. The
+    // caller (mr_composite) has set up a viewport matching the full screen.
+    // We must restore it after we are done so subsequent drawing is not
+    // constrained to the FBO's smaller dimensions.
+    GLint saved_viewport[4];
+    glGetIntegerv(GL_VIEWPORT, saved_viewport);
+
+    // ── Find or create a cached FBO pair for this (w, h) ──
+    // Multiple panels (dock, menubar) call blur each frame with different sizes.
+    // We search the cache for a matching slot; if none found, claim an empty one.
+    BlurCacheSlot *slot = NULL;
+    for (int i = 0; i < BLUR_CACHE_SLOTS; i++) {
+        if (blur_cache[i].w == w && blur_cache[i].h == h) {
+            slot = &blur_cache[i];
+            break;
+        }
     }
 
-    // Create two FBOs for the ping-pong blur passes.
-    // FBO-A receives the horizontal blur, FBO-B receives the vertical blur.
-    GLuint fbo_a, tex_a, fbo_b, tex_b;
-    fbo_a = shaders_create_fbo(w, h, &tex_a);
-    fbo_b = shaders_create_fbo(w, h, &tex_b);
+    // No matching slot — find an empty one and create FBOs for this size
+    if (!slot) {
+        for (int i = 0; i < BLUR_CACHE_SLOTS; i++) {
+            if (blur_cache[i].w == 0 && blur_cache[i].h == 0) {
+                slot = &blur_cache[i];
+                break;
+            }
+        }
+        if (!slot) {
+            // All slots occupied by other sizes — evict slot 0 as a fallback.
+            // This shouldn't happen with 4 slots and only 2-3 panels.
+            slot = &blur_cache[0];
+            if (slot->fbo_a) shaders_destroy_fbo(slot->fbo_a, slot->tex_a);
+            if (slot->fbo_b) shaders_destroy_fbo(slot->fbo_b, slot->tex_b);
+            memset(slot, 0, sizeof(*slot));
+        }
 
-    if (!fbo_a || !fbo_b) {
-        fprintf(stderr, "[plugin] effect_blur: failed to create FBOs\n");
-        if (fbo_a) shaders_destroy_fbo(fbo_a, tex_a);
-        if (fbo_b) shaders_destroy_fbo(fbo_b, tex_b);
-        return;
+        slot->fbo_a = shaders_create_fbo(w, h, &slot->tex_a);
+        slot->fbo_b = shaders_create_fbo(w, h, &slot->tex_b);
+
+        if (!slot->fbo_a || !slot->fbo_b) {
+            fprintf(stderr, "[plugin] effect_blur: failed to create FBOs\n");
+            if (slot->fbo_a) shaders_destroy_fbo(slot->fbo_a, slot->tex_a);
+            if (slot->fbo_b) shaders_destroy_fbo(slot->fbo_b, slot->tex_b);
+            memset(slot, 0, sizeof(*slot));
+            return;
+        }
+
+        slot->w = w;
+        slot->h = h;
+        fprintf(stderr, "[plugin] Blur FBO cache slot created: %dx%d\n", w, h);
     }
+
+    // Use the cached FBOs for this frame's blur passes
+    GLuint fbo_a = slot->fbo_a, tex_a = slot->tex_a;
+    GLuint fbo_b = slot->fbo_b, tex_b = slot->tex_b;
 
     // Build an orthographic projection that maps (0,0)-(w,h) to the FBO.
     // This is separate from the screen projection because the FBO has its
-    // own dimensions.
+    // own dimensions — FBOs have their own coordinate space.
     float fbo_proj[16];
     shaders_ortho(fbo_proj, 0.0f, (float)w, 0.0f, (float)h, -1.0f, 1.0f);
 
@@ -1171,11 +1220,20 @@ void plugin_effect_blur(GLuint texture, int x, int y, int w, int h,
     shaders_draw_quad(0.0f, 0.0f, (float)w, (float)h);
 
     // ---- Done: copy result back to screen ----
-    // Unbind the FBO so subsequent draws go to the screen, then draw the
-    // blurred texture (from FBO-B) at the original window position.
+    // Unbind the FBO so subsequent draws go to the default framebuffer (screen),
+    // then draw the blurred texture (from FBO-B) at the original window position.
     shaders_unbind_fbo();
 
-    // Restore the screen projection and draw the blurred result
+    // ── Restore the saved viewport ──
+    // The FBO passes set glViewport to the FBO's dimensions (w x h). Now that
+    // we are drawing back to the screen, we must restore the full-screen
+    // viewport. Without this, all subsequent draws in this frame would be
+    // clipped to the panel's small region.
+    glViewport(saved_viewport[0], saved_viewport[1],
+               saved_viewport[2], saved_viewport[3]);
+
+    // Draw the blurred result at the panel's screen position using the
+    // screen's projection matrix (restored from before the blur passes).
     shaders_use(progs->basic);
     shaders_set_projection(progs->basic, projection);
     shaders_set_texture(progs->basic, 0);
@@ -1186,11 +1244,8 @@ void plugin_effect_blur(GLuint texture, int x, int y, int w, int h,
 
     shaders_use_none();
 
-    // Clean up the temporary FBOs — they are only needed for this frame.
-    // If blur is applied every frame, creating/destroying FBOs each time is
-    // wasteful. A future optimization would be to cache them per-window.
-    shaders_destroy_fbo(fbo_a, tex_a);
-    shaders_destroy_fbo(fbo_b, tex_b);
+    // FBOs are cached — no per-frame cleanup needed. They persist until
+    // the blur target changes size or plugin_shutdown() is called.
 }
 
 void plugin_effect_desaturate(GLuint texture, float amount)
@@ -1338,10 +1393,6 @@ void plugin_effect_scale(GLuint texture, float scale)
     }
 
     float *projection = mr_get_projection();
-    if (!projection) {
-        fprintf(stderr, "[plugin] effect_scale: projection not available\n");
-        return;
-    }
 
     // Query the texture dimensions so we know the original size
     int tw = 0, th = 0;

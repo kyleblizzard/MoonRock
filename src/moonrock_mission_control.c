@@ -14,9 +14,8 @@
 //
 // ============================================================================
 
-// _GNU_SOURCE enables POSIX extensions we need, including clock_gettime()
-// with CLOCK_MONOTONIC for high-resolution timing.
-#define _GNU_SOURCE
+// POSIX extensions (clock_gettime, CLOCK_MONOTONIC) require _GNU_SOURCE
+// (provided by meson via -D_GNU_SOURCE).
 
 #include "moonrock_mission_control.h"
 #include "moonrock_anim.h"
@@ -132,13 +131,13 @@ static GLuint thumb_fbo_tex = 0;    // Texture attached to the FBO (temporary)
 // ============================================================================
 
 static void compute_tiled_layout(MissionControlState *state, int screen_w, int screen_h);
-static void draw_space_thumbnails(AuraWM *wm, GLuint shader, float *projection, float ease);
+static void draw_space_thumbnails(CCWM *wm, GLuint shader, float *projection, float ease);
 static int find_space_index(int space_id);
 static int find_window_in_space(MCSpace *space, Window win);
-static void map_space_windows(AuraWM *wm, int space_index);
-static void unmap_space_windows(AuraWM *wm, int space_index);
-static void mc_render_space_thumbnail(AuraWM *wm, int space_index);
-static void mc_ensure_thumbnails(AuraWM *wm);
+static void map_space_windows(CCWM *wm, int space_index);
+static void unmap_space_windows(CCWM *wm, int space_index);
+static void mc_render_space_thumbnail(CCWM *wm, int space_index);
+static void mc_ensure_thumbnails(CCWM *wm);
 
 
 // ============================================================================
@@ -149,7 +148,7 @@ static void mc_ensure_thumbnails(AuraWM *wm);
 //
 // Creates the first Space ("Desktop 1") and assigns every currently mapped
 // window to it. All animation and hover state is zeroed out.
-void mc_init(AuraWM *wm)
+void mc_init(CCWM *wm)
 {
     // Zero out the entire state struct so all booleans are false,
     // all counts are 0, and all pointers are NULL.
@@ -196,7 +195,7 @@ void mc_init(AuraWM *wm)
 //
 // Frees the window arrays in each Space and deletes any thumbnail textures
 // that were created for the desktop previews.
-void mc_shutdown(AuraWM *wm)
+void mc_shutdown(CCWM *wm)
 {
     (void)wm;  // wm is unused but kept for API consistency
 
@@ -243,7 +242,7 @@ void mc_shutdown(AuraWM *wm)
 //   - If hidden: enter Mission Control (zoom out to overview).
 //   - If shown or animating in: exit Mission Control (zoom back).
 //   - If already animating out: do nothing (let the exit finish).
-void mc_toggle(AuraWM *wm)
+void mc_toggle(CCWM *wm)
 {
     if (mc.animating_out) {
         // Already exiting — don't interrupt the animation.
@@ -266,7 +265,7 @@ void mc_toggle(AuraWM *wm)
 //   2. Compute the tiled grid layout for the current Space.
 //   3. Start the 0.3-second enter animation.
 //   4. Grab the keyboard and pointer so all input routes through mc_handle_event().
-void mc_enter(AuraWM *wm)
+void mc_enter(CCWM *wm)
 {
     // Don't enter if we're already active or animating.
     if (mc.active || mc.animating_in || mc.animating_out) return;
@@ -366,7 +365,7 @@ void mc_enter(AuraWM *wm)
 //
 // focus_window: if not None, this window will be raised and focused after
 //               the animation finishes. Pass None to keep the current focus.
-void mc_exit(AuraWM *wm, Window focus_window)
+void mc_exit(CCWM *wm, Window focus_window)
 {
     // Don't exit if we're already exiting or not in Mission Control.
     if (mc.animating_out) return;
@@ -402,10 +401,6 @@ void mc_exit(AuraWM *wm, Window focus_window)
             XRaiseWindow(wm->dpy, c->frame);
         }
     }
-
-    // Clear drag state so we don't carry stale references into the next
-    // Mission Control activation.
-    memset(&drag, 0, sizeof(drag));
 
     (void)wm;  // Suppress unused warning in case no focus logic runs
 }
@@ -507,7 +502,7 @@ static void compute_tiled_layout(MissionControlState *state, int screen_w, int s
 //   4. Copying the FBO's texture into the Space's thumbnail_tex.
 //
 // space_index: the index into mc.spaces[] of the Space to render.
-static void mc_render_space_thumbnail(AuraWM *wm, int space_index)
+static void mc_render_space_thumbnail(CCWM *wm, int space_index)
 {
     MCSpace *space = &mc.spaces[space_index];
 
@@ -603,7 +598,7 @@ static void mc_render_space_thumbnail(AuraWM *wm, int space_index)
 // Iterates through all Spaces and re-renders the thumbnail for any that
 // have been marked dirty (thumbnail_dirty = true). This is called from
 // mc_enter() and whenever a Space's window list changes.
-static void mc_ensure_thumbnails(AuraWM *wm)
+static void mc_ensure_thumbnails(CCWM *wm)
 {
     for (int i = 0; i < mc.space_count; i++) {
         if (mc.spaces[i].thumbnail_dirty) {
@@ -625,7 +620,7 @@ static void mc_ensure_thumbnails(AuraWM *wm)
 //
 // Returns true if Mission Control still needs rendering (animation in progress
 // or overlay is active). Returns false when fully dismissed.
-bool mc_update(AuraWM *wm)
+bool mc_update(CCWM *wm)
 {
     // Nothing to do if Mission Control is completely idle.
     if (!mc.active && !mc.animating_in && !mc.animating_out) {
@@ -680,7 +675,7 @@ bool mc_update(AuraWM *wm)
 // Space (virtual desktop). The active Space is highlighted. Each thumbnail
 // shows a miniaturized preview of that desktop's windows.
 
-static void draw_space_thumbnails(AuraWM *wm, GLuint shader, float *projection,
+static void draw_space_thumbnails(CCWM *wm, GLuint shader, float *projection,
                                   float ease)
 {
     // Each thumbnail is a small rectangle at the top of the screen.
@@ -776,7 +771,7 @@ static void draw_space_thumbnails(AuraWM *wm, GLuint shader, float *projection,
 //   2. Space thumbnails along the top.
 //   3. Tiled windows at their animated positions.
 //   4. Hover highlight on the window/space under the cursor.
-void mc_draw(AuraWM *wm, GLuint basic_shader, float *projection)
+void mc_draw(CCWM *wm, GLuint basic_shader, float *projection)
 {
     // Don't draw anything if Mission Control is fully hidden.
     if (!mc.active && !mc.animating_in && !mc.animating_out) return;
@@ -834,7 +829,7 @@ void mc_draw(AuraWM *wm, GLuint basic_shader, float *projection)
         // If the mouse is over this window, draw a blue border around it
         // so the user knows they can click to focus it.
         if (i == mc.hover_window && (mc.active || mc.animating_in)) {
-            // AuraOS blue highlight (slightly translucent).
+            // CopiCatOS blue highlight (slightly translucent).
             shaders_set_color(basic_shader, 0.22f, 0.46f, 0.84f, 0.5f * ease);
             // Draw a rectangle slightly larger than the window (4px border).
             shaders_draw_quad(x - 4.0f, y - 4.0f, w + 8.0f, h + 8.0f);
@@ -919,7 +914,7 @@ void mc_draw(AuraWM *wm, GLuint basic_shader, float *projection)
 //   - Mouse click:   focus a window, switch a space, or exit.
 //   - Keyboard:      Escape exits, arrow keys cycle spaces.
 
-bool mc_handle_event(AuraWM *wm, XEvent *ev)
+bool mc_handle_event(CCWM *wm, XEvent *ev)
 {
     // If Mission Control is not active and not animating, don't consume events.
     if (!mc.active && !mc.animating_in && !mc.animating_out) {
@@ -1096,10 +1091,10 @@ bool mc_handle_event(AuraWM *wm, XEvent *ev)
                 drag.current_y      = (float)my;
                 drag.past_threshold = false;
 
-                // Record the offset from the cursor to the window's top-left
-                // corner so the window doesn't jump when the drag starts.
-                drag.offset_x = (float)mx - wx;
-                drag.offset_y = (float)my - wy;
+                // Record the offset from the cursor to the window's center
+                // so the window doesn't jump when the drag starts.
+                drag.offset_x = (float)mx - (wx + ww / 2.0f);
+                drag.offset_y = (float)my - (wy + wh / 2.0f);
 
                 return true;
             }
@@ -1274,7 +1269,7 @@ static int find_window_in_space(MCSpace *space, Window win)
 
 // Map (make visible) all windows belonging to a given Space.
 // Called when switching to this Space so its windows appear on screen.
-static void map_space_windows(AuraWM *wm, int space_index)
+static void map_space_windows(CCWM *wm, int space_index)
 {
     MCSpace *space = &mc.spaces[space_index];
     for (int i = 0; i < space->window_count; i++) {
@@ -1291,7 +1286,7 @@ static void map_space_windows(AuraWM *wm, int space_index)
 
 // Unmap (hide) all windows belonging to a given Space.
 // Called when switching away from this Space so its windows disappear.
-static void unmap_space_windows(AuraWM *wm, int space_index)
+static void unmap_space_windows(CCWM *wm, int space_index)
 {
     MCSpace *space = &mc.spaces[space_index];
     for (int i = 0; i < space->window_count; i++) {
@@ -1317,7 +1312,7 @@ static void unmap_space_windows(AuraWM *wm, int space_index)
 //
 // Returns the new Space's unique ID, or -1 if the maximum number of Spaces
 // (MC_MAX_SPACES = 16) has been reached.
-int mc_add_space(AuraWM *wm)
+int mc_add_space(CCWM *wm)
 {
     (void)wm;  // Not directly needed but kept for API consistency
 
@@ -1355,7 +1350,7 @@ int mc_add_space(AuraWM *wm)
 // was first). You cannot remove the last remaining Space.
 //
 // space_id: the unique ID of the Space to remove.
-void mc_remove_space(AuraWM *wm, int space_id)
+void mc_remove_space(CCWM *wm, int space_id)
 {
     // Find the Space to remove.
     int idx = find_space_index(space_id);
@@ -1431,7 +1426,7 @@ void mc_remove_space(AuraWM *wm, int space_id)
 // (windows slide left or right depending on the direction of the switch).
 //
 // space_id: the unique ID of the Space to switch to.
-void mc_switch_space(AuraWM *wm, int space_id)
+void mc_switch_space(CCWM *wm, int space_id)
 {
     int idx = find_space_index(space_id);
     if (idx < 0) {
@@ -1482,7 +1477,7 @@ void mc_switch_space(AuraWM *wm, int space_id)
 //
 // win:      the X11 window ID of the window to move.
 // space_id: the unique ID of the destination Space.
-void mc_move_window_to_space(AuraWM *wm, Window win, int space_id)
+void mc_move_window_to_space(CCWM *wm, Window win, int space_id)
 {
     int dest_idx = find_space_index(space_id);
     if (dest_idx < 0) {
@@ -1541,31 +1536,4 @@ void mc_move_window_to_space(AuraWM *wm, Window win, int space_id)
 
     fprintf(stderr, "[Mission Control] Moved window 0x%lx to %s\n",
             (unsigned long)win, dest->name);
-}
-
-
-// ============================================================================
-//  Window lifecycle notifications
-// ============================================================================
-
-// Notify Mission Control that a window has been unmapped (destroyed or hidden).
-//
-// If Mission Control is active and the unmapped window is the one currently
-// being dragged, we must cancel the drag immediately. Otherwise the drag state
-// holds a stale index into tiled_windows[] which can cause out-of-bounds access
-// if the array is later modified (e.g., by compute_tiled_layout).
-void mc_notify_window_unmapped(Window win)
-{
-    if (!mc.active || !drag.active) return;
-
-    // Check if the dragged window was the one that got destroyed.
-    if (drag.window_idx >= 0 && drag.window_idx < mc.tiled_count) {
-        // Compare the tiled window's X window ID against the unmapped one.
-        if (mc.tiled_windows[drag.window_idx].xwin == win) {
-            fprintf(stderr, "[mc] Dragged window 0x%lx destroyed, cancelling drag\n", win);
-            drag.active = false;
-            drag.past_threshold = false;
-            drag.window_idx = -1;
-        }
-    }
 }

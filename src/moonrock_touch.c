@@ -7,7 +7,7 @@
 //  MoonRock Touch Input & Display Rotation — implementation
 // ============================================================================
 //
-// This file implements multitouch input handling for AuraOS using XInput2.
+// This file implements multitouch input handling for MoonRock Compositor using XInput2.
 //
 // The flow is:
 //   1. touch_init() finds touchscreen hardware via XIQueryDevice and registers
@@ -32,8 +32,7 @@
 //
 // ============================================================================
 
-// _GNU_SOURCE gives us access to M_PI and other POSIX extensions from <math.h>.
-#define _GNU_SOURCE
+// M_PI and POSIX extensions require _GNU_SOURCE (provided by meson via -D_GNU_SOURCE).
 
 #include "moonrock_touch.h"
 

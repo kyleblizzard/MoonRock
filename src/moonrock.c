@@ -3,9 +3,9 @@
 // Unauthorized copying, forking, or distribution of this file,
 // via any medium, is strictly prohibited.
 //
-// AuraOS — MoonRock Compositor (Phase 1)
+// MoonRock Compositor (Phase 1)
 //
-// MoonRock is AuraOS's built-in OpenGL compositor, replacing picom. Instead of
+// MoonRock is a built-in OpenGL compositor, replacing picom. Instead of
 // relying on an external program to composite windows, MoonRock handles it
 // directly inside the window manager using OpenGL for GPU-accelerated rendering.
 //
@@ -30,35 +30,16 @@
 //   6. VSync keeps us locked to the monitor's refresh rate (typically 60 Hz),
 //      preventing screen tearing.
 
-#define _GNU_SOURCE  // Needed for M_PI from <math.h>
+// M_PI requires _GNU_SOURCE (provided by meson via -D_GNU_SOURCE).
 #include "moonrock.h"
-
-// ── Custom X11 error handler ──
-// X11's default error handler calls exit(), which kills the compositor if a
-// window is destroyed between our check and our X call (a common race).
-// This handler catches the expected transient errors (BadWindow, BadMatch,
-// BadDrawable) and logs them instead of crashing.
-static int mr_x11_error_handler(Display *dpy, XErrorEvent *event)
-{
-    (void)dpy;  // unused — we just log and continue
-
-    // BadWindow (3) and BadMatch (8) are expected during window lifecycle
-    // when windows are destroyed between our check and our X call.
-    // BadDrawable (9) can occur for the same reason with pixmaps.
-    // Log them but don't crash.
-    if (event->error_code == BadWindow || event->error_code == BadMatch ||
-        event->error_code == BadDrawable) {
-        fprintf(stderr, "[moonrock] X11 error (ignored): code=%d, xid=0x%lx, op=%d\n",
-                event->error_code, event->resourceid, event->request_code);
-        return 0;
-    }
-    fprintf(stderr, "[moonrock] X11 error: code=%d, xid=0x%lx, op=%d\n",
-            event->error_code, event->resourceid, event->request_code);
-    return 0;
-}
 #include "moonrock_shaders.h"
 #include "moonrock_display.h"
+#include "moonrock_color.h"
+#include "moonrock_robust.h"
 #include "moonrock_plugin.h"
+#include "moonrock_anim.h"
+#include "moonrock_mission_control.h"
+#include "moonrock_touch.h"
 #include "ewmh.h"
 
 // Forward declaration removed — compositor.c is no longer linked.
@@ -146,10 +127,10 @@ struct WindowTexture {
 // ────────────────────────────────────────────────────────────────────────
 //
 // All MoonRock state lives in this single struct. Using a static struct at
-// file scope means only moonrock.c can access it, keeping the compositor's
+// file scope means only mr.c can access it, keeping the compositor's
 // internals private from the rest of the window manager.
 
-// Global flag indicating whether compositing is active. In AuraOS this is
+// Global flag indicating whether compositing is active. In CopiCatOS this is
 // defined in decor.c and shared with frame.c. In standalone MoonRock we
 // define it here since there is no external WM module providing it.
 #if !defined(MR_EMBEDDED_IN_WM)
@@ -160,6 +141,20 @@ extern bool compositor_active;
 
 static struct {
     bool active;                    // Is MoonRock initialized and running?
+
+    // ── Compositor selection ownership ──
+    // A compositor must claim the _NET_WM_CM_S<screen> selection so that
+    // other compositors (and apps querying COMPOSITE_MANAGER) know a
+    // compositor is active. We create a tiny invisible window just to hold
+    // the selection — X requires a window as the selection owner.
+    Window cm_owner_win;
+
+    // ── XComposite overlay window ──
+    // The overlay window is a special child of root that sits above all
+    // normal windows. We render into it instead of root directly, which is
+    // the correct approach for a real compositor. Input is passed through
+    // via XFixes so the overlay doesn't eat mouse/keyboard events.
+    Window overlay_win;
 
     // ── GLX / OpenGL context ──
     // A "GLX context" is the bridge between X11 and OpenGL. It holds all
@@ -172,8 +167,8 @@ static struct {
     // We need one that supports texture_from_pixmap for binding X pixmaps.
     GLXFBConfig fb_config;
 
-    // The GLX drawable we render to — this is essentially the root window
-    // wrapped in a GLX surface so OpenGL can draw to it.
+    // The GLX drawable we render to — wraps the overlay window so OpenGL
+    // can draw to it via GLX.
     GLXWindow gl_window;
 
     // Screen dimensions — needed for the orthographic projection matrix
@@ -225,7 +220,7 @@ static struct {
     // 4x4 orthographic projection computed once per frame and passed to
     // every shader program as the u_projection uniform.
     float projection[16];
-} moonrock;
+} mr;
 
 // ────────────────────────────────────────────────────────────────────────
 // SECTION: Forward declarations (private helper functions)
@@ -233,13 +228,13 @@ static struct {
 
 static void draw_window_shadow(struct WindowTexture *wt, bool focused);
 static void generate_shadow_texture(struct WindowTexture *wt, bool focused);
-static void refresh_window_texture(AuraWM *wm, struct WindowTexture *wt);
-static void refresh_window_texture_fallback(AuraWM *wm, struct WindowTexture *wt);
-static void release_window_texture(AuraWM *wm, struct WindowTexture *wt);
+static void refresh_window_texture(CCWM *wm, struct WindowTexture *wt);
+static void refresh_window_texture_fallback(CCWM *wm, struct WindowTexture *wt);
+static void release_window_texture(CCWM *wm, struct WindowTexture *wt);
 static struct WindowTexture *find_window_texture(Window xwin);
 static bool choose_fb_configs(Display *dpy, int screen);
 static bool load_glx_extensions(Display *dpy, int screen);
-static void sync_tracked_windows(AuraWM *wm);
+static void sync_tracked_windows(CCWM *wm);
 
 // ────────────────────────────────────────────────────────────────────────
 // SECTION: FBConfig selection
@@ -284,7 +279,7 @@ static bool choose_fb_configs(Display *dpy, int screen)
 
     // Take the first matching config — the X server returns them sorted by
     // preference (fewest extra features first, best match at index 0).
-    moonrock.fb_config = configs[0];
+    mr.fb_config = configs[0];
     XFree(configs);
 
     // ── Pixmap FBConfig (RGBA — for 32-bit windows with alpha) ──
@@ -304,7 +299,7 @@ static bool choose_fb_configs(Display *dpy, int screen)
 
     configs = glXChooseFBConfig(dpy, screen, pixmap_attrs_rgba, &num_configs);
     if (configs && num_configs > 0) {
-        moonrock.pixmap_fb_config = configs[0];
+        mr.pixmap_fb_config = configs[0];
         XFree(configs);
     } else {
         fprintf(stderr, "[moonrock] WARNING: No FBConfig for RGBA pixmap binding\n");
@@ -325,7 +320,7 @@ static bool choose_fb_configs(Display *dpy, int screen)
 
     configs = glXChooseFBConfig(dpy, screen, pixmap_attrs_rgb, &num_configs);
     if (configs && num_configs > 0) {
-        moonrock.pixmap_fb_config_rgb = configs[0];
+        mr.pixmap_fb_config_rgb = configs[0];
         XFree(configs);
     } else {
         fprintf(stderr, "[moonrock] WARNING: No FBConfig for RGB pixmap binding\n");
@@ -371,7 +366,7 @@ static bool load_glx_extensions(Display *dpy, int screen)
 
         // Both functions must be present for the extension to work
         if (glXBindTexImageEXT_func && glXReleaseTexImageEXT_func) {
-            moonrock.has_texture_from_pixmap = true;
+            mr.has_texture_from_pixmap = true;
             fprintf(stderr, "[moonrock] GLX_EXT_texture_from_pixmap available "
                     "(fast path)\n");
         } else {
@@ -407,7 +402,7 @@ static bool load_glx_extensions(Display *dpy, int screen)
 // compositor, but stored in MoonRock's state. We need a 32-bit visual with
 // an alpha channel so frame windows can have semi-transparent shadow regions.
 
-static bool find_argb_visual(AuraWM *wm)
+static bool find_argb_visual(CCWM *wm)
 {
     // Ask X for all 32-bit TrueColor visuals on this screen.
     // "TrueColor" means direct RGB values (not palette-indexed).
@@ -429,12 +424,12 @@ static bool find_argb_visual(AuraWM *wm)
     }
 
     // Use the first match (usually there's exactly one 32-bit TrueColor visual)
-    moonrock.argb_visual = visuals[0].visual;
+    mr.argb_visual = visuals[0].visual;
 
     // Every visual needs a colormap (X11 requirement). AllocNone means
     // "don't reserve any color cells" — it's just a formality for TrueColor.
-    moonrock.argb_colormap = XCreateColormap(wm->dpy, wm->root,
-                                             moonrock.argb_visual, AllocNone);
+    mr.argb_colormap = XCreateColormap(wm->dpy, wm->root,
+                                             mr.argb_visual, AllocNone);
 
     XFree(visuals);
     return true;
@@ -444,18 +439,18 @@ static bool find_argb_visual(AuraWM *wm)
 // SECTION: Initialization
 // ────────────────────────────────────────────────────────────────────────
 
-bool mr_init(AuraWM *wm)
+bool mr_init(CCWM *wm)
 {
     if (!wm || !wm->dpy) return false;
 
     // Zero out all state so we start clean
-    memset(&moonrock, 0, sizeof(moonrock));
+    memset(&mr, 0, sizeof(mr));
 
     // Default background color — a dark neutral gray. This is what you see
     // behind all windows if there's no wallpaper.
-    moonrock.bg_r = 0.15f;
-    moonrock.bg_g = 0.15f;
-    moonrock.bg_b = 0.18f;
+    mr.bg_r = 0.15f;
+    mr.bg_g = 0.15f;
+    mr.bg_b = 0.18f;
 
     fprintf(stderr, "[moonrock] Initializing MoonRock Compositor...\n");
 
@@ -507,10 +502,10 @@ bool mr_init(AuraWM *wm)
         return false;
     }
     // Store the event base — we need it to identify DamageNotify events
-    XDamageQueryExtension(wm->dpy, &moonrock.damage_event_base,
-                          &moonrock.damage_error_base);
+    XDamageQueryExtension(wm->dpy, &mr.damage_event_base,
+                          &mr.damage_error_base);
     fprintf(stderr, "[moonrock] XDamage %d.%d (event base: %d)\n",
-            damage_major, damage_minor, moonrock.damage_event_base);
+            damage_major, damage_minor, mr.damage_event_base);
 
     // ── Step 4: Check for XFixes ──
     // XFixes provides input shape manipulation — we use it to make shadow
@@ -536,25 +531,56 @@ bool mr_init(AuraWM *wm)
     // FBConfig, then "make it current" so GL calls go to this context.
     // NULL = no shared context (we only have one).
     // True = direct rendering (bypass X server for GL calls — much faster).
-    moonrock.gl_context = glXCreateNewContext(wm->dpy, moonrock.fb_config,
+    mr.gl_context = glXCreateNewContext(wm->dpy, mr.fb_config,
                                              GLX_RGBA_TYPE, NULL, True);
-    if (!moonrock.gl_context) {
+    if (!mr.gl_context) {
         fprintf(stderr, "[moonrock] ERROR: Cannot create GLX context\n");
         return false;
     }
     fprintf(stderr, "[moonrock] GLX context created (direct: %s)\n",
-            glXIsDirect(wm->dpy, moonrock.gl_context) ? "yes" : "no");
+            glXIsDirect(wm->dpy, mr.gl_context) ? "yes" : "no");
 
-    // ── Step 7: Create a GLX window from the root window ──
-    // We can't render directly to an X window — we need a GLX wrapper.
-    // This creates a GLX drawable backed by the root window, which is where
-    // our composited output will appear.
-    moonrock.gl_window = glXCreateWindow(wm->dpy, moonrock.fb_config,
-                                         wm->root, NULL);
-    if (!moonrock.gl_window) {
-        fprintf(stderr, "[moonrock] ERROR: Cannot create GLX window\n");
-        glXDestroyContext(wm->dpy, moonrock.gl_context);
-        moonrock.gl_context = NULL;
+    // ── Step 7: Get the XComposite overlay window and create a GLX surface ──
+    //
+    // The overlay window is a special X11 window managed by the XComposite
+    // extension that sits above ALL other windows on the screen. Rendering
+    // into it (rather than directly into root) is the correct approach for a
+    // real compositor because:
+    //   1. It does not interfere with root's background pixmap or other WM state.
+    //   2. The X server already knows to display it on top of everything.
+    //   3. It avoids FBConfig BadMatch errors that can occur when binding root.
+    //
+    // After getting the overlay window we:
+    //   a. Wrap it in a GLX surface so OpenGL can render to it.
+    //   b. Use XFixes to set an empty input shape so mouse/keyboard events
+    //      pass straight through to the windows beneath — the overlay must
+    //      NEVER eat input events.
+    mr.overlay_win = XCompositeGetOverlayWindow(wm->dpy, wm->root);
+    if (!mr.overlay_win) {
+        fprintf(stderr, "[moonrock] ERROR: Cannot get XComposite overlay window\n");
+        glXDestroyContext(wm->dpy, mr.gl_context);
+        mr.gl_context = NULL;
+        return false;
+    }
+    fprintf(stderr, "[moonrock] Overlay window obtained (0x%lx)\n", mr.overlay_win);
+
+    // Allow input events to pass through the overlay to windows underneath.
+    // An empty XserverRegion means "no input area" — the overlay is invisible
+    // to the input system.
+    XserverRegion empty_region = XFixesCreateRegion(wm->dpy, NULL, 0);
+    XFixesSetWindowShapeRegion(wm->dpy, mr.overlay_win,
+                               ShapeInput, 0, 0, empty_region);
+    XFixesDestroyRegion(wm->dpy, empty_region);
+
+    // Wrap the overlay window in a GLX drawable so OpenGL can render to it.
+    mr.gl_window = glXCreateWindow(wm->dpy, mr.fb_config,
+                                   mr.overlay_win, NULL);
+    if (!mr.gl_window) {
+        fprintf(stderr, "[moonrock] ERROR: Cannot create GLX window from overlay\n");
+        XCompositeReleaseOverlayWindow(wm->dpy, wm->root);
+        mr.overlay_win = 0;
+        glXDestroyContext(wm->dpy, mr.gl_context);
+        mr.gl_context = NULL;
         return false;
     }
 
@@ -562,13 +588,13 @@ bool mr_init(AuraWM *wm)
     // "Making current" binds the GLX context to the current thread and the
     // GLX window. All subsequent OpenGL calls will render to this window
     // through this context. Think of it as "activating" the context.
-    if (!glXMakeContextCurrent(wm->dpy, moonrock.gl_window, moonrock.gl_window,
-                                moonrock.gl_context)) {
+    if (!glXMakeContextCurrent(wm->dpy, mr.gl_window, mr.gl_window,
+                                mr.gl_context)) {
         fprintf(stderr, "[moonrock] ERROR: Cannot make GLX context current\n");
-        glXDestroyWindow(wm->dpy, moonrock.gl_window);
-        glXDestroyContext(wm->dpy, moonrock.gl_context);
-        moonrock.gl_window = 0;
-        moonrock.gl_context = NULL;
+        glXDestroyWindow(wm->dpy, mr.gl_window);
+        glXDestroyContext(wm->dpy, mr.gl_context);
+        mr.gl_window = 0;
+        mr.gl_context = NULL;
         return false;
     }
 
@@ -580,19 +606,45 @@ bool mr_init(AuraWM *wm)
     // screen where one frame ends and the next begins. VSync synchronizes
     // buffer swaps with the monitor's refresh rate.
     if (glXSwapIntervalEXT_func) {
-        glXSwapIntervalEXT_func(wm->dpy, moonrock.gl_window, 1);
+        glXSwapIntervalEXT_func(wm->dpy, mr.gl_window, 1);
         fprintf(stderr, "[moonrock] VSync enabled (swap interval = 1)\n");
     } else {
         fprintf(stderr, "[moonrock] WARNING: VSync not available "
                 "(may see tearing)\n");
     }
 
-    // ── Step 10.5: Install custom X11 error handler ──
-    // Must be set before any X calls that could race with window destruction
-    // (especially XComposite redirect below). Without this, a BadWindow during
-    // normal window lifecycle would invoke the default handler and exit().
-    XSetErrorHandler(mr_x11_error_handler);
-    fprintf(stderr, "[moonrock] Custom X11 error handler installed\n");
+    // ── Step 10.8: Claim the compositor selection _NET_WM_CM_S<n> ──
+    // X11 convention: any program that wants to act as a compositor must
+    // claim this selection on the screen it manages. Other compositors check
+    // for this selection before starting — if it's already owned, they back
+    // off. Apps can also query it to know whether compositing is active.
+    //
+    // We create a minimal invisible window just to hold the selection.
+    // X11 requires a window as the selection owner; the window itself
+    // doesn't need to be visible or functional.
+    {
+        char sel_name[32];
+        snprintf(sel_name, sizeof(sel_name), "_NET_WM_CM_S%d", wm->screen);
+        Atom cm_atom = XInternAtom(wm->dpy, sel_name, False);
+
+        // Warn if something else already owns it (another compositor running)
+        Window existing = XGetSelectionOwner(wm->dpy, cm_atom);
+        if (existing != None) {
+            fprintf(stderr, "[moonrock] WARNING: %s already owned by window 0x%lx — "
+                    "another compositor may be active\n", sel_name, existing);
+        }
+
+        // Create the owner window (1x1 px, off-screen at -10,-10)
+        mr.cm_owner_win = XCreateSimpleWindow(wm->dpy, wm->root,
+                                               -10, -10, 1, 1, 0, 0, 0);
+        XSetSelectionOwner(wm->dpy, cm_atom, mr.cm_owner_win, CurrentTime);
+
+        if (XGetSelectionOwner(wm->dpy, cm_atom) == mr.cm_owner_win) {
+            fprintf(stderr, "[moonrock] Compositor selection %s claimed\n", sel_name);
+        } else {
+            fprintf(stderr, "[moonrock] WARNING: Failed to claim %s\n", sel_name);
+        }
+    }
 
     // ── Step 11: Set up XComposite redirection ──
     // Manual mode: MoonRock is responsible for compositing all window contents
@@ -611,8 +663,8 @@ bool mr_init(AuraWM *wm)
     }
 
     // ── Step 13: Store screen dimensions ──
-    moonrock.root_w = wm->root_w;
-    moonrock.root_h = wm->root_h;
+    mr.root_w = wm->root_w;
+    mr.root_h = wm->root_h;
 
     // ── Step 14: Initialize OpenGL state ──
     //
@@ -622,7 +674,7 @@ bool mr_init(AuraWM *wm)
 
     // Set the "clear color" — the background that shows through when no
     // windows cover a region. This fills the screen before we draw anything.
-    glClearColor(moonrock.bg_r, moonrock.bg_g, moonrock.bg_b, 1.0f);
+    glClearColor(mr.bg_r, mr.bg_g, mr.bg_b, 1.0f);
 
     // Enable 2D texturing — required for drawing window contents as textures
     // on quads. When disabled, quads are drawn as solid colors.
@@ -661,7 +713,7 @@ bool mr_init(AuraWM *wm)
     // GL_PROJECTION is the "lens" of our virtual camera.
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    glOrtho(0, moonrock.root_w, moonrock.root_h, 0, -1, 1);
+    glOrtho(0, mr.root_w, mr.root_h, 0, -1, 1);
 
     // GL_MODELVIEW positions objects in the scene. We start with identity
     // (no transformation) since our coordinates are already in screen space.
@@ -681,7 +733,7 @@ bool mr_init(AuraWM *wm)
     //
     // shader_dir can be NULL — embedded fallback shaders are compiled into
     // moonrock_shaders.c so the compositor works even without shader files.
-    if (!shaders_init(&moonrock.shaders, NULL)) {
+    if (!shaders_init(&mr.shaders, NULL)) {
         fprintf(stderr, "[moonrock] WARNING: Shader initialization failed, "
                 "falling back to fixed-function GL\n");
         // We continue anyway — the compositor can still work with shaders.basic=0
@@ -689,8 +741,8 @@ bool mr_init(AuraWM *wm)
     } else {
         fprintf(stderr, "[moonrock] Shader pipeline initialized "
                 "(basic=%u, blur_h=%u, blur_v=%u, shadow=%u)\n",
-                moonrock.shaders.basic, moonrock.shaders.blur_h,
-                moonrock.shaders.blur_v, moonrock.shaders.shadow);
+                mr.shaders.basic, mr.shaders.blur_h,
+                mr.shaders.blur_v, mr.shaders.shadow);
     }
 
     // Create the VBO/VAO for quad rendering. This is a single unit quad (0..1)
@@ -699,18 +751,69 @@ bool mr_init(AuraWM *wm)
     shaders_init_quad_vbo();
 
     // Build the initial orthographic projection matrix
-    shaders_ortho(moonrock.projection,
-                  0, (float)moonrock.root_w,
-                  (float)moonrock.root_h, 0,
+    shaders_ortho(mr.projection,
+                  0, (float)mr.root_w,
+                  (float)mr.root_h, 0,
                   -1.0f, 1.0f);
 
     // Mark MoonRock as active
-    moonrock.active = true;
+    mr.active = true;
 
     // Also set the global compositor_active flag so the rest of the WM
     // (frame.c, decor.c) knows compositing is available. This flag controls
     // whether frame windows get ARGB visuals and shadow padding.
     compositor_active = true;
+
+    // ── Step 16: Initialize MoonRock subsystems ──
+    //
+    // Each subsystem is independent — if one fails, the compositor still works,
+    // just without that feature. Order matters: display and color must come
+    // before anything that queries scale factors or monitor geometry.
+
+    // Display management — enumerates connected monitors via XRandR, tracks
+    // output geometry for multi-monitor support and direct scanout bypass.
+    if (!display_init(wm->dpy, wm->screen)) {
+        fprintf(stderr, "[moonrock] WARNING: Display subsystem init failed "
+                "(multi-monitor features unavailable)\n");
+    }
+
+    // Color management — detects display PPI and computes scale factors for
+    // HiDPI rendering. Also loads GL uniform functions for tone mapping.
+    if (!color_init(wm->dpy, wm->screen)) {
+        fprintf(stderr, "[moonrock] WARNING: Color subsystem init failed "
+                "(scale factor defaults to 1.0x)\n");
+    }
+
+    // Robustness layer — sets up hardware cursor (smooth mouse regardless of
+    // compositor load), crash recovery fallback, session persistence, and
+    // power management detection.
+    if (!robust_init(wm->dpy, wm->screen)) {
+        fprintf(stderr, "[moonrock] WARNING: Robust subsystem init failed "
+                "(hardware cursor and crash recovery unavailable)\n");
+    }
+
+    // Plugin system — initializes the theme engine with Snow Leopard defaults,
+    // hot corner array, and window rule storage. Must come before any code
+    // that queries plugin_get_theme() (e.g., blur-behind in mr_composite).
+    if (!plugin_init()) {
+        fprintf(stderr, "[moonrock] WARNING: Plugin subsystem init failed "
+                "(theming unavailable)\n");
+    }
+
+    // Animation framework — zeroes the fixed-size animation slot array.
+    // Must be ready before mr_composite() calls anim_update()/anim_draw().
+    anim_init();
+
+    // Mission Control — creates the initial Space and assigns existing windows.
+    // Must come after the WM has scanned existing windows (wm->clients populated).
+    mc_init(wm);
+
+    // Touch input — finds XInput2 touchscreen devices and registers for
+    // multitouch events. Non-fatal if no touchscreen is present (e.g., desktop).
+    if (!touch_init(wm->dpy, wm->root)) {
+        fprintf(stderr, "[moonrock] NOTE: Touch input not available "
+                "(no touchscreen detected)\n");
+    }
 
     fprintf(stderr, "[moonrock] MoonRock Compositor initialized successfully\n");
     fprintf(stderr, "[moonrock] OpenGL renderer: %s\n", glGetString(GL_RENDERER));
@@ -730,9 +833,9 @@ bool mr_init(AuraWM *wm)
 // Returns NULL if the window isn't tracked (e.g., hasn't been mapped yet).
 static struct WindowTexture *find_window_texture(Window xwin)
 {
-    for (int i = 0; i < moonrock.window_count; i++) {
-        if (moonrock.windows[i].xwin == xwin) {
-            return &moonrock.windows[i];
+    for (int i = 0; i < mr.window_count; i++) {
+        if (mr.windows[i].xwin == xwin) {
+            return &mr.windows[i];
         }
     }
     return NULL;
@@ -745,9 +848,9 @@ static struct WindowTexture *find_window_texture(Window xwin)
 // The texture_from_pixmap extension works by creating a GLX pixmap wrapper
 // around the X pixmap, then binding that as a texture source. The GPU can
 // then sample from it directly when drawing.
-static void refresh_window_texture(AuraWM *wm, struct WindowTexture *wt)
+static void refresh_window_texture(CCWM *wm, struct WindowTexture *wt)
 {
-    if (!moonrock.has_texture_from_pixmap) {
+    if (!mr.has_texture_from_pixmap) {
         // Fall back to CPU-based texture upload
         refresh_window_texture_fallback(wm, wt);
         return;
@@ -791,15 +894,25 @@ static void refresh_window_texture(AuraWM *wm, struct WindowTexture *wt)
     // where the X server is rendering this window's contents.
     wt->pixmap = XCompositeNameWindowPixmap(wm->dpy, wt->xwin);
     if (!wt->pixmap) {
-        fprintf(stderr, "[moonrock] WARNING: Cannot get pixmap for window 0x%lx\n",
-                wt->xwin);
+        // Pixmap creation can fail if the window was just created and the
+        // compositor redirect hasn't fully propagated. Fall back to the CPU
+        // path which reads directly from the window drawable.
+        refresh_window_texture_fallback(wm, wt);
         return;
     }
 
     // Choose the right FBConfig based on whether the window has alpha.
     // ARGB windows need the RGBA config; regular windows use RGB.
-    GLXFBConfig fb = wt->has_alpha ? moonrock.pixmap_fb_config
-                                   : moonrock.pixmap_fb_config_rgb;
+    // If the matching config wasn't found during init (null), go straight
+    // to the CPU fallback rather than passing null to glXCreatePixmap.
+    GLXFBConfig fb = wt->has_alpha ? mr.pixmap_fb_config
+                                   : mr.pixmap_fb_config_rgb;
+
+    if (!fb) {
+        // No matching FBConfig — use the CPU fallback
+        refresh_window_texture_fallback(wm, wt);
+        return;
+    }
 
     // Create a GLX pixmap — this wraps the X pixmap so GLX can use it.
     // The attributes tell GLX how to interpret the pixmap data:
@@ -854,7 +967,7 @@ static void refresh_window_texture(AuraWM *wm, struct WindowTexture *wt)
 //
 // On a modern system, this copies data over the PCIe bus twice (GPU→CPU→GPU),
 // which is much slower than the zero-copy texture_from_pixmap approach.
-static void refresh_window_texture_fallback(AuraWM *wm, struct WindowTexture *wt)
+static void refresh_window_texture_fallback(CCWM *wm, struct WindowTexture *wt)
 {
     // For override-redirect windows (tooltips, menus, popups), we read pixels
     // directly from the window instead of using XComposite pixmaps. These
@@ -893,18 +1006,27 @@ static void refresh_window_texture_fallback(AuraWM *wm, struct WindowTexture *wt
         wt->pixmap = 0;
     }
 
+    // Try to get the composite pixmap first. If that fails (window just
+    // created, redirect not yet active, or window is being destroyed),
+    // fall back to reading directly from the window drawable.
+    Drawable read_from = 0;
     wt->pixmap = XCompositeNameWindowPixmap(wm->dpy, wt->xwin);
-    if (!wt->pixmap) return;
+    if (wt->pixmap) {
+        read_from = wt->pixmap;
+    } else {
+        // Direct window read as last resort — same approach used for
+        // override-redirect windows. This is reliable but means we're
+        // reading from the window's front buffer, which may show
+        // tearing during updates.
+        read_from = wt->xwin;
+    }
 
-    // XGetImage reads pixel data from a drawable (pixmap) into CPU memory.
-    // ZPixmap format returns the image as a packed pixel array (as opposed to
-    // XYPixmap which separates color planes).
-    // AllPlanes means "read all color channels."
-    XImage *img = XGetImage(wm->dpy, wt->pixmap, 0, 0,
+    // XGetImage reads pixel data from a drawable (pixmap or window) into
+    // CPU memory. ZPixmap format returns a packed pixel array.
+    XImage *img = XGetImage(wm->dpy, read_from, 0, 0,
                             wt->w, wt->h, AllPlanes, ZPixmap);
     if (!img) {
-        fprintf(stderr, "[moonrock] WARNING: XGetImage failed for 0x%lx\n",
-                wt->xwin);
+        // Window might have been destroyed between our check and read
         return;
     }
 
@@ -936,7 +1058,7 @@ static void refresh_window_texture_fallback(AuraWM *wm, struct WindowTexture *wt
 
 // Release all GPU and X resources associated with a window's texture.
 // Called when a window is unmapped or when shutting down.
-static void release_window_texture(AuraWM *wm, struct WindowTexture *wt)
+static void release_window_texture(CCWM *wm, struct WindowTexture *wt)
 {
     // Release the texture binding (must happen before destroying the pixmap)
     if (wt->bound && wt->glx_pixmap && glXReleaseTexImageEXT_func) {
@@ -981,15 +1103,15 @@ static void release_window_texture(AuraWM *wm, struct WindowTexture *wt)
 // SECTION: Window lifecycle (map/unmap/damage)
 // ────────────────────────────────────────────────────────────────────────
 
-void mr_window_mapped(AuraWM *wm, Client *c)
+void mr_window_mapped(CCWM *wm, Client *c)
 {
-    if (!moonrock.active || !wm || !c || !c->frame) return;
+    if (!mr.active || !wm || !c || !c->frame) return;
 
     // Don't add duplicates — check if we're already tracking this window
     if (find_window_texture(c->frame)) return;
 
     // Make sure we haven't hit the window limit
-    if (moonrock.window_count >= MAX_CLIENTS) {
+    if (mr.window_count >= MAX_CLIENTS) {
         fprintf(stderr, "[moonrock] WARNING: Maximum window count reached, "
                 "cannot track window 0x%lx\n", c->frame);
         return;
@@ -1005,7 +1127,7 @@ void mr_window_mapped(AuraWM *wm, Client *c)
     }
 
     // Create a new tracking entry for this window
-    struct WindowTexture *wt = &moonrock.windows[moonrock.window_count];
+    struct WindowTexture *wt = &mr.windows[mr.window_count];
     memset(wt, 0, sizeof(*wt));
 
     wt->xwin = c->frame;
@@ -1042,7 +1164,7 @@ void mr_window_mapped(AuraWM *wm, Client *c)
     // We then acknowledge the damage and refresh the texture.
     wt->damage = XDamageCreate(wm->dpy, c->frame, XDamageReportNonEmpty);
 
-    moonrock.window_count++;
+    mr.window_count++;
 
     if (getenv("AURA_DEBUG")) {
         fprintf(stderr, "[moonrock] Mapped window 0x%lx (%dx%d at %d,%d, "
@@ -1051,24 +1173,24 @@ void mr_window_mapped(AuraWM *wm, Client *c)
     }
 }
 
-void mr_window_unmapped(AuraWM *wm, Client *c)
+void mr_window_unmapped(CCWM *wm, Client *c)
 {
-    if (!moonrock.active || !wm || !c) return;
+    if (!mr.active || !wm || !c) return;
 
     // Find the window in our tracking array
-    for (int i = 0; i < moonrock.window_count; i++) {
-        if (moonrock.windows[i].xwin == c->frame) {
+    for (int i = 0; i < mr.window_count; i++) {
+        if (mr.windows[i].xwin == c->frame) {
             // Release all GPU and X resources for this window
-            release_window_texture(wm, &moonrock.windows[i]);
+            release_window_texture(wm, &mr.windows[i]);
 
             // Remove from the array by shifting everything after it left.
             // This maintains the z-order (array order = stacking order).
-            int remaining = moonrock.window_count - i - 1;
+            int remaining = mr.window_count - i - 1;
             if (remaining > 0) {
-                memmove(&moonrock.windows[i], &moonrock.windows[i + 1],
+                memmove(&mr.windows[i], &mr.windows[i + 1],
                         remaining * sizeof(struct WindowTexture));
             }
-            moonrock.window_count--;
+            mr.window_count--;
 
             if (getenv("AURA_DEBUG")) {
                 fprintf(stderr, "[moonrock] Unmapped window 0x%lx\n", c->frame);
@@ -1078,9 +1200,9 @@ void mr_window_unmapped(AuraWM *wm, Client *c)
     }
 }
 
-void mr_window_damaged(AuraWM *wm, Client *c)
+void mr_window_damaged(CCWM *wm, Client *c)
 {
-    if (!moonrock.active || !wm || !c) return;
+    if (!mr.active || !wm || !c) return;
 
     // Try the frame window first (that's what we track), then the client window
     struct WindowTexture *wt = find_window_texture(c->frame);
@@ -1099,9 +1221,9 @@ void mr_window_damaged(AuraWM *wm, Client *c)
 
 // Called when a window is resized — update our tracking info and refresh
 // the texture since the old pixmap is now invalid.
-void mr_window_resized(AuraWM *wm, Client *c)
+void mr_window_resized(CCWM *wm, Client *c)
 {
-    if (!moonrock.active || !wm || !c) return;
+    if (!mr.active || !wm || !c) return;
 
     struct WindowTexture *wt = find_window_texture(c->frame);
     if (!wt) return;
@@ -1152,7 +1274,7 @@ void mr_window_resized(AuraWM *wm, Client *c)
 // This also handles cleanup: if a tracked window is no longer a child of
 // root (or is no longer viewable), we remove its tracking entry.
 
-static void sync_tracked_windows(AuraWM *wm)
+static void sync_tracked_windows(CCWM *wm)
 {
     Window root_ret, parent_ret;
     Window *children = NULL;
@@ -1200,17 +1322,17 @@ static void sync_tracked_windows(AuraWM *wm)
             }
 
             // Mark this entry as still alive
-            int idx = (int)(wt - moonrock.windows);
-            if (idx >= 0 && idx < moonrock.window_count) {
+            int idx = (int)(wt - mr.windows);
+            if (idx >= 0 && idx < mr.window_count) {
                 seen[idx] = true;
             }
             continue;
         }
 
         // New window — add a tracking entry if we have room
-        if (moonrock.window_count >= MAX_CLIENTS) continue;
+        if (mr.window_count >= MAX_CLIENTS) continue;
 
-        wt = &moonrock.windows[moonrock.window_count];
+        wt = &mr.windows[mr.window_count];
         memset(wt, 0, sizeof(*wt));
 
         wt->xwin = children[i];
@@ -1241,8 +1363,8 @@ static void sync_tracked_windows(AuraWM *wm)
         }
 
         // Mark this new entry as seen
-        seen[moonrock.window_count] = true;
-        moonrock.window_count++;
+        seen[mr.window_count] = true;
+        mr.window_count++;
 
         if (getenv("AURA_DEBUG")) {
             fprintf(stderr, "[moonrock] Auto-tracked window 0x%lx (%dx%d at %d,%d%s)\n",
@@ -1253,29 +1375,29 @@ static void sync_tracked_windows(AuraWM *wm)
 
     // ── Pass 3: Remove tracked windows that are no longer visible ──
     // Iterate backwards so removals don't shift indices we haven't checked yet.
-    for (int i = moonrock.window_count - 1; i >= 0; i--) {
+    for (int i = mr.window_count - 1; i >= 0; i--) {
         if (!seen[i]) {
             if (getenv("AURA_DEBUG")) {
                 fprintf(stderr, "[moonrock] Removing stale window 0x%lx\n",
-                        moonrock.windows[i].xwin);
+                        mr.windows[i].xwin);
             }
             // If this was an override-redirect window, unredirect it since
             // we explicitly redirected it in the tracking pass above.
             // This is safe even if the window is already destroyed — X11
             // silently ignores the call for non-existent windows.
-            if (moonrock.windows[i].override_redirect) {
-                XCompositeUnredirectWindow(wm->dpy, moonrock.windows[i].xwin,
+            if (mr.windows[i].override_redirect) {
+                XCompositeUnredirectWindow(wm->dpy, mr.windows[i].xwin,
                                            CompositeRedirectManual);
             }
 
-            release_window_texture(wm, &moonrock.windows[i]);
+            release_window_texture(wm, &mr.windows[i]);
 
-            int remaining = moonrock.window_count - i - 1;
+            int remaining = mr.window_count - i - 1;
             if (remaining > 0) {
-                memmove(&moonrock.windows[i], &moonrock.windows[i + 1],
+                memmove(&mr.windows[i], &mr.windows[i + 1],
                         remaining * sizeof(struct WindowTexture));
             }
-            moonrock.window_count--;
+            mr.window_count--;
         }
     }
 
@@ -1283,11 +1405,11 @@ static void sync_tracked_windows(AuraWM *wm)
     // XQueryTree returns children in bottom-to-top order, which is exactly
     // the order we need for back-to-front compositing. Rebuild the array
     // to match this stacking order so windows overlap correctly.
-    if (moonrock.window_count > 1) {
+    if (mr.window_count > 1) {
         struct WindowTexture reordered[MAX_CLIENTS];
         int count = 0;
 
-        for (unsigned int i = 0; i < nchildren && count < moonrock.window_count; i++) {
+        for (unsigned int i = 0; i < nchildren && count < mr.window_count; i++) {
             struct WindowTexture *wt = find_window_texture(children[i]);
             if (wt) {
                 reordered[count++] = *wt;
@@ -1295,8 +1417,8 @@ static void sync_tracked_windows(AuraWM *wm)
         }
 
         // Copy the reordered array back
-        if (count == moonrock.window_count) {
-            memcpy(moonrock.windows, reordered,
+        if (count == mr.window_count) {
+            memcpy(mr.windows, reordered,
                    count * sizeof(struct WindowTexture));
         }
     }
@@ -1366,14 +1488,6 @@ static void generate_shadow_texture(struct WindowTexture *wt, bool focused)
     int pad = radius * 2;
     int shadow_w = chrome_w + pad * 2;
     int shadow_h = chrome_h + pad * 2;
-
-    // Prevent integer overflow and unreasonable GPU allocations.
-    // 16384 is a safe upper bound for texture dimensions on most GPUs.
-    if (shadow_w <= 0 || shadow_h <= 0 || shadow_w > 16384 || shadow_h > 16384) {
-        fprintf(stderr, "[moonrock] Shadow dimensions out of range: %dx%d\n",
-                shadow_w, shadow_h);
-        return;
-    }
 
     // ── Step 1: Create the shadow shape ──
     // Allocate a single-channel (grayscale) buffer. Start with all zeros
@@ -1589,11 +1703,11 @@ static void draw_window_shadow(struct WindowTexture *wt, bool focused)
     // shadow texture and outputs premultiplied black with that alpha.
     // The u_alpha uniform is set to 1.0 because shadow intensity is
     // already baked into the cached texture.
-    if (moonrock.shaders.shadow) {
-        shaders_use(moonrock.shaders.shadow);
-        shaders_set_projection(moonrock.shaders.shadow, moonrock.projection);
-        shaders_set_texture(moonrock.shaders.shadow, 0);
-        shaders_set_alpha(moonrock.shaders.shadow, 1.0f);
+    if (mr.shaders.shadow) {
+        shaders_use(mr.shaders.shadow);
+        shaders_set_projection(mr.shaders.shadow, mr.projection);
+        shaders_set_texture(mr.shaders.shadow, 0);
+        shaders_set_alpha(mr.shaders.shadow, 1.0f);
         glBindTexture(GL_TEXTURE_2D, wt->shadow_tex);
         shaders_draw_quad(sx, sy,
                           (float)wt->shadow_tex_w, (float)wt->shadow_tex_h);
@@ -1632,9 +1746,9 @@ static void draw_window_shadow(struct WindowTexture *wt, bool focused)
 //      c. Draw a textured quad at the window's screen position
 //   4. Swap buffers to show the frame
 
-void mr_composite(AuraWM *wm)
+void mr_composite(CCWM *wm)
 {
-    if (!moonrock.active || !wm) return;
+    if (!mr.active || !wm) return;
 
     // ── Step 0: Check for direct scanout bypass ──
     // If a single fullscreen opaque window covers the entire display (e.g.,
@@ -1648,8 +1762,8 @@ void mr_composite(AuraWM *wm)
     // Make our GL context current. This is technically redundant if we're
     // the only GL user, but it's good practice — other code might have
     // changed the current context.
-    glXMakeContextCurrent(wm->dpy, moonrock.gl_window, moonrock.gl_window,
-                          moonrock.gl_context);
+    glXMakeContextCurrent(wm->dpy, mr.gl_window, mr.gl_window,
+                          mr.gl_context);
 
     // ── Step 1: Clear the screen ──
     glClear(GL_COLOR_BUFFER_BIT);
@@ -1658,9 +1772,9 @@ void mr_composite(AuraWM *wm)
     // Rebuild the orthographic projection each frame in case the screen was
     // resized. This maps pixel coordinates to OpenGL clip space:
     //   (0,0) = top-left, (root_w, root_h) = bottom-right.
-    shaders_ortho(moonrock.projection,
-                  0, (float)moonrock.root_w,
-                  (float)moonrock.root_h, 0,
+    shaders_ortho(mr.projection,
+                  0, (float)mr.root_w,
+                  (float)mr.root_h, 0,
                   -1.0f, 1.0f);
 
     // ── Step 3: Enable blending for transparent windows ──
@@ -1688,8 +1802,8 @@ void mr_composite(AuraWM *wm)
     // top, and normal windows are sandwiched between them.
 
     for (int pass = 0; pass < 3; pass++) {
-        for (int i = 0; i < moonrock.window_count; i++) {
-            struct WindowTexture *wt = &moonrock.windows[i];
+        for (int i = 0; i < mr.window_count; i++) {
+            struct WindowTexture *wt = &mr.windows[i];
 
             // Determine which pass this window belongs to by checking
             // the _NET_WM_WINDOW_TYPE property. Dock/panel windows go in
@@ -1722,10 +1836,15 @@ void mr_composite(AuraWM *wm)
             // ── Refresh dirty textures ──
             // If the window's contents have changed since the last frame,
             // update the OpenGL texture with the new pixel data.
-            // Override-redirect windows (menus, tooltips) are always refreshed
-            // because they don't use XDamage tracking — their contents are
-            // read directly from the window each frame.
-            if (wt->dirty || wt->override_redirect) {
+            //
+            // Override-redirect windows (menus, tooltips) and dock/panel
+            // windows (pass 2) are always refreshed because:
+            //   - Override-redirect windows don't use XDamage tracking
+            //   - Dock/panel windows may lose their XDamage tracker when
+            //     killed and restarted (the new window gets a fresh ID but
+            //     damage events may not be delivered reliably). These are
+            //     small enough that per-frame refresh is negligible.
+            if (wt->dirty || wt->override_redirect || window_pass == 2) {
                 refresh_window_texture(wm, wt);
                 wt->dirty = false;
             }
@@ -1743,15 +1862,49 @@ void mr_composite(AuraWM *wm)
 
             // ── Apply blur-behind for translucent panels ──
             // Dock and panel windows (pass 2) can have frosted glass blur.
-            // Before drawing the panel, we capture the region behind it,
-            // blur it, and draw the blurred result. The panel's own texture
-            // is then composited on top, creating the frosted glass look.
-            if (window_pass == 2 && moonrock.shaders.blur_h && moonrock.shaders.blur_v) {
+            //
+            // The technique:
+            //   1. Capture the current framebuffer contents at the panel's
+            //      screen region into a temporary GL texture. This texture
+            //      contains everything rendered so far (desktop + normal
+            //      windows) — exactly what should appear blurred behind
+            //      the panel.
+            //   2. Pass that texture to plugin_effect_blur, which runs a
+            //      two-pass Gaussian blur and draws the result back to the
+            //      screen at the same position.
+            //   3. Delete the temporary texture — it is only needed this frame.
+            //   4. The panel's own window texture is then drawn on top,
+            //      creating the frosted glass look.
+            //
+            // The key fix here: we used to pass texture ID 0 (the GL default
+            // "no texture" state), which sampled nothing. Now we capture the
+            // real scene content first.
+            if (window_pass == 2 && mr.shaders.blur_h && mr.shaders.blur_v) {
                 ThemeDefinition *theme = plugin_get_theme();
                 float blur_radius = theme ? theme->blur_behind_radius : 0.0f;
                 if (blur_radius > 0.0f) {
-                    plugin_effect_blur(0, wt->x, wt->y, wt->w, wt->h,
-                                       blur_radius);
+                    // Capture the framebuffer region behind this panel.
+                    // glCopyTexImage2D reads from the current read buffer
+                    // (the default framebuffer here) into a new texture.
+                    //
+                    // GL coordinate origin is bottom-left, screen coordinates
+                    // are top-left, so we flip the Y: gl_y = root_h - y - h.
+                    GLuint capture_tex = 0;
+                    glGenTextures(1, &capture_tex);
+                    glBindTexture(GL_TEXTURE_2D, capture_tex);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    int gl_y = mr.root_h - wt->y - wt->h;
+                    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
+                                     wt->x, gl_y, wt->w, wt->h, 0);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+
+                    plugin_effect_blur(capture_tex, wt->x, wt->y,
+                                       wt->w, wt->h, blur_radius);
+
+                    // Done — the blurred result is already on screen.
+                    // Free the temporary capture texture.
+                    glDeleteTextures(1, &capture_tex);
                 }
             }
 
@@ -1759,11 +1912,11 @@ void mr_composite(AuraWM *wm)
             // Activate the basic shader program, which samples the window's
             // texture and applies alpha blending. Then draw a quad covering
             // the window's screen rectangle using the VBO pipeline.
-            if (moonrock.shaders.basic) {
-                shaders_use(moonrock.shaders.basic);
-                shaders_set_projection(moonrock.shaders.basic, moonrock.projection);
-                shaders_set_texture(moonrock.shaders.basic, 0);
-                shaders_set_alpha(moonrock.shaders.basic, 1.0f);
+            if (mr.shaders.basic) {
+                shaders_use(mr.shaders.basic);
+                shaders_set_projection(mr.shaders.basic, mr.projection);
+                shaders_set_texture(mr.shaders.basic, 0);
+                shaders_set_alpha(mr.shaders.basic, 1.0f);
                 glBindTexture(GL_TEXTURE_2D, wt->texture);
                 shaders_draw_quad((float)wt->x, (float)wt->y,
                                   (float)wt->w, (float)wt->h);
@@ -1788,10 +1941,28 @@ void mr_composite(AuraWM *wm)
         }
     }
 
-    // Deactivate shaders before buffer swap to leave GL in a clean state
+    // Deactivate shaders before overlay passes
     shaders_use_none();
 
-    // ── Step 5: Swap buffers ──
+    // ── Step 5: Animations ──
+    // Advance all active animations (genie minimize, fade in/out, zoom) by
+    // computing elapsed time and applying easing curves. Then draw them on
+    // top of normal windows — animations are overlays that temporarily replace
+    // the window's static texture with a moving/fading version.
+    anim_update();
+    anim_draw(mr.shaders.basic, mr.shaders.genie, mr.projection);
+
+    // ── Step 6: Mission Control overlay ──
+    // If Mission Control is active (user triggered the bird's-eye view),
+    // update its animation state and draw the tiled window grid + Space
+    // thumbnails on top of everything. Mission Control takes over the entire
+    // screen when active, so it draws last (except for the buffer swap).
+    if (mc_is_active()) {
+        mc_update(wm);
+        mc_draw(wm, mr.shaders.basic, mr.projection);
+    }
+
+    // ── Step 7: Swap buffers ──
     // We've been drawing to the "back buffer" (an invisible off-screen surface).
     // glXSwapBuffers swaps the back buffer with the front buffer (what's on
     // screen), making our new frame visible instantaneously. This is called
@@ -1800,21 +1971,21 @@ void mr_composite(AuraWM *wm)
     //
     // If VSync is enabled, this call blocks until the next vertical blank
     // period, limiting us to the monitor's refresh rate (typically 60 FPS).
-    glXSwapBuffers(wm->dpy, moonrock.gl_window);
+    glXSwapBuffers(wm->dpy, mr.gl_window);
 }
 
 // ────────────────────────────────────────────────────────────────────────
 // SECTION: Event handling
 // ────────────────────────────────────────────────────────────────────────
 
-bool mr_handle_event(AuraWM *wm, XEvent *e)
+bool mr_handle_event(CCWM *wm, XEvent *e)
 {
-    if (!moonrock.active || !wm || !e) return false;
+    if (!mr.active || !wm || !e) return false;
 
     // Check if this is an XDamage event.
     // XDamage events have type == (damage_event_base + XDamageNotify).
     // XDamageNotify is 0, so the type is just damage_event_base.
-    if (e->type == moonrock.damage_event_base + XDamageNotify) {
+    if (e->type == mr.damage_event_base + XDamageNotify) {
         // Cast the generic XEvent to the damage-specific struct
         XDamageNotifyEvent *dev = (XDamageNotifyEvent *)e;
 
@@ -1857,7 +2028,7 @@ bool mr_handle_event(AuraWM *wm, XEvent *e)
 // This is the same logic as the old compositor_set_input_shape(), kept
 // here for consistency since MoonRock owns compositing now.
 
-void mr_set_input_shape(AuraWM *wm, Client *c)
+void mr_set_input_shape(CCWM *wm, Client *c)
 {
     if (!wm || !c || !c->frame) return;
 
@@ -1901,15 +2072,15 @@ void mr_set_input_shape(AuraWM *wm, Client *c)
 // They maintain compatibility with the old compositor's
 // compositor_create_argb_visual() interface.
 
-bool mr_create_argb_visual(AuraWM *wm, Visual **out_visual,
+bool mr_create_argb_visual(CCWM *wm, Visual **out_visual,
                                 Colormap *out_colormap)
 {
     if (!out_visual || !out_colormap) return false;
 
     // If MoonRock found an ARGB visual during init, return it
-    if (moonrock.argb_visual && moonrock.argb_colormap) {
-        *out_visual = moonrock.argb_visual;
-        *out_colormap = moonrock.argb_colormap;
+    if (mr.argb_visual && mr.argb_colormap) {
+        *out_visual = mr.argb_visual;
+        *out_colormap = mr.argb_colormap;
         return true;
     }
 
@@ -1952,95 +2123,141 @@ bool mr_create_argb_visual(AuraWM *wm, Visual **out_visual,
 
 bool mr_is_active(void)
 {
-    return moonrock.active;
+    return mr.active;
 }
 
 int mr_get_damage_event_base(void)
 {
-    return moonrock.damage_event_base;
+    return mr.damage_event_base;
 }
 
 // ────────────────────────────────────────────────────────────────────────
 // SECTION: Screen resize handling
 // ────────────────────────────────────────────────────────────────────────
 
-static void mr_screen_resized(AuraWM *wm)
+static void mr_screen_resized(CCWM *wm)
 {
-    if (!moonrock.active || !wm) return;
+    if (!mr.active || !wm) return;
 
     // Update our stored screen dimensions
-    moonrock.root_w = wm->root_w;
-    moonrock.root_h = wm->root_h;
+    mr.root_w = wm->root_w;
+    mr.root_h = wm->root_h;
 
     // Update the GL viewport to match the new screen size.
     // The viewport maps OpenGL's normalized coordinates to pixel coordinates.
     // (0, 0) is the bottom-left corner; (root_w, root_h) is the top-right.
-    glViewport(0, 0, moonrock.root_w, moonrock.root_h);
+    glViewport(0, 0, mr.root_w, mr.root_h);
 
     // Rebuild the orthographic projection matrix for the new dimensions
-    shaders_ortho(moonrock.projection,
-                  0, (float)moonrock.root_w,
-                  (float)moonrock.root_h, 0,
+    shaders_ortho(mr.projection,
+                  0, (float)mr.root_w,
+                  (float)mr.root_h, 0,
                   -1.0f, 1.0f);
 
     fprintf(stderr, "[moonrock] Screen resized to %dx%d\n",
-            moonrock.root_w, moonrock.root_h);
+            mr.root_w, mr.root_h);
 }
 
 // ────────────────────────────────────────────────────────────────────────
 // SECTION: Shutdown
 // ────────────────────────────────────────────────────────────────────────
 
-void mr_shutdown(AuraWM *wm)
+void mr_shutdown(CCWM *wm)
 {
     if (!wm || !wm->dpy) return;
 
     fprintf(stderr, "[moonrock] Shutting down MoonRock Compositor...\n");
 
+    // ── Shut down subsystems in reverse init order ──
+    // Reverse order ensures dependencies are respected — subsystems that were
+    // initialized last (and may depend on earlier ones) are torn down first.
+
+    // Touch input — releases accelerometer claim, dismisses OSK, clears state
+    touch_shutdown();
+
+    // Mission Control — frees Space window lists and thumbnail textures
+    mc_shutdown(wm);
+
+    // Animation framework — marks all slots inactive
+    anim_shutdown();
+
+    // Plugin system — unloads plugins, closes shared library handles
+    plugin_shutdown();
+
+    // Robustness layer — closes log file, flushes buffered data
+    robust_shutdown();
+
+    // Color management — clears display info and resets gamma
+    color_shutdown();
+
+    // Display management — frees output array and screencast resources
+    display_shutdown();
+
     // Destroy shader programs and VBO before releasing GL context
-    shaders_shutdown(&moonrock.shaders);
+    shaders_shutdown(&mr.shaders);
     shaders_shutdown_quad_vbo();
 
     // Release all tracked window textures
-    for (int i = 0; i < moonrock.window_count; i++) {
-        release_window_texture(wm, &moonrock.windows[i]);
+    for (int i = 0; i < mr.window_count; i++) {
+        release_window_texture(wm, &mr.windows[i]);
     }
-    moonrock.window_count = 0;
+    mr.window_count = 0;
 
     // Undo XComposite redirection — let X go back to drawing windows directly.
     // This is critical for a clean shutdown. If we don't do this and the WM
     // crashes, the screen goes blank because windows are still redirected to
     // off-screen pixmaps that nobody is compositing.
-    if (moonrock.active) {
+    if (mr.active) {
         XCompositeUnredirectSubwindows(wm->dpy, wm->root,
                                        CompositeRedirectManual);
         fprintf(stderr, "[moonrock] Unredirected subwindows\n");
     }
 
     // Destroy the GLX context and window.
-    // Order matters: release the context first, then destroy the window.
-    if (moonrock.gl_context) {
-        // Make sure nothing is current before destroying
+    // Order matters: release the context first, then destroy the GLX surface,
+    // then release the overlay window back to the X server.
+    if (mr.gl_context) {
+        // Detach the context from all drawables before destroying it.
+        // This is required — destroying a context while it is current is
+        // undefined behavior in GLX.
         glXMakeContextCurrent(wm->dpy, None, None, NULL);
 
-        if (moonrock.gl_window) {
-            glXDestroyWindow(wm->dpy, moonrock.gl_window);
-            moonrock.gl_window = 0;
+        if (mr.gl_window) {
+            glXDestroyWindow(wm->dpy, mr.gl_window);
+            mr.gl_window = 0;
         }
 
-        glXDestroyContext(wm->dpy, moonrock.gl_context);
-        moonrock.gl_context = NULL;
+        glXDestroyContext(wm->dpy, mr.gl_context);
+        mr.gl_context = NULL;
+    }
+
+    // Release the XComposite overlay window back to the X server.
+    // Without this, the overlay window stays mapped after we exit and
+    // blocks input to all other windows.
+    if (mr.overlay_win) {
+        XCompositeReleaseOverlayWindow(wm->dpy, wm->root);
+        mr.overlay_win = 0;
+        fprintf(stderr, "[moonrock] Overlay window released\n");
+    }
+
+    // Release the compositor selection by destroying the owner window.
+    // When the owner window is destroyed, X automatically clears the
+    // selection so other compositors can claim it.
+    if (mr.cm_owner_win) {
+        XDestroyWindow(wm->dpy, mr.cm_owner_win);
+        mr.cm_owner_win = 0;
+        fprintf(stderr, "[moonrock] Compositor selection released\n");
     }
 
     // Free the ARGB colormap (the visual is owned by X, not us)
-    if (moonrock.argb_colormap) {
-        XFreeColormap(wm->dpy, moonrock.argb_colormap);
-        moonrock.argb_colormap = 0;
+    if (mr.argb_colormap) {
+        XFreeColormap(wm->dpy, mr.argb_colormap);
+        mr.argb_colormap = 0;
     }
-    moonrock.argb_visual = NULL;
+    mr.argb_visual = NULL;
 
     // Clear flags
-    moonrock.active = false;
+    mr.active = false;
     compositor_active = false;
 
     fprintf(stderr, "[moonrock] MoonRock Compositor shut down\n");
@@ -2055,7 +2272,7 @@ void mr_shutdown(AuraWM *wm)
 // in the GL pipeline. For now, these are no-ops so the rest of the codebase
 // can call them without conditional compilation.
 
-void mr_animate_minimize(AuraWM *wm, Client *c,
+void mr_animate_minimize(CCWM *wm, Client *c,
                               int dock_icon_x, int dock_icon_y)
 {
     // Phase 4: Genie minimize animation.
@@ -2067,7 +2284,7 @@ void mr_animate_minimize(AuraWM *wm, Client *c,
     (void)dock_icon_y;
 }
 
-void mr_animate_restore(AuraWM *wm, Client *c,
+void mr_animate_restore(CCWM *wm, Client *c,
                              int dock_icon_x, int dock_icon_y)
 {
     // Phase 4: Genie restore animation (reverse of minimize).
@@ -2078,7 +2295,7 @@ void mr_animate_restore(AuraWM *wm, Client *c,
     (void)dock_icon_y;
 }
 
-bool mr_animation_active(AuraWM *wm)
+bool mr_animation_active(CCWM *wm)
 {
     // Phase 4: Returns true if any animation is in progress.
     // When active, the main loop should keep calling mr_composite()
@@ -2094,16 +2311,16 @@ bool mr_animation_active(AuraWM *wm)
 //
 // These let other MoonRock modules (Mission Control, animations, plugins)
 // access the shader programs and window textures without reaching into
-// the static moonrock struct directly.
+// the static mr struct directly.
 
 ShaderPrograms *mr_get_shaders(void)
 {
-    return &moonrock.shaders;
+    return &mr.shaders;
 }
 
 float *mr_get_projection(void)
 {
-    return moonrock.projection;
+    return mr.projection;
 }
 
 // Look up a window's GL texture handle by its X window ID.

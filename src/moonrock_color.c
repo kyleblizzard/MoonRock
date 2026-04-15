@@ -140,7 +140,7 @@ static bool load_gl_functions(void)
 
     // Both functions are required for tone mapping to work
     if (!pfn_glGetUniformLocation || !pfn_glUniform1f) {
-        fprintf(stderr, "[moonrock_color] WARNING: Could not load GL uniform "
+        fprintf(stderr, "[mr_color] WARNING: Could not load GL uniform "
                 "functions. Tone mapping will be unavailable.\n");
         return false;
     }
@@ -357,7 +357,7 @@ bool color_init(void *dpy, int screen)
     // outputs.
     XRRScreenResources *res = XRRGetScreenResources(d, root);
     if (!res) {
-        fprintf(stderr, "[moonrock_color] ERROR: XRRGetScreenResources failed. "
+        fprintf(stderr, "[mr_color] ERROR: XRRGetScreenResources failed. "
                 "Cannot detect displays.\n");
         return false;
     }
@@ -473,7 +473,7 @@ bool color_init(void *dpy, int screen)
         di->has_hdr = check_hdr_capable(d, res->outputs[i]);
 
         // Log what we found for debugging
-        fprintf(stderr, "[moonrock_color] Display %d: \"%s\" %dx%d @ %dHz, "
+        fprintf(stderr, "[mr_color] Display %d: \"%s\" %dx%d @ %dHz, "
                 "%.0f PPI, scale %.2fx%s%s\n",
                 display_count, di->name,
                 di->width_px, di->height_px, di->refresh_hz,
@@ -489,12 +489,12 @@ bool color_init(void *dpy, int screen)
     XRRFreeScreenResources(res);
 
     if (display_count == 0) {
-        fprintf(stderr, "[moonrock_color] WARNING: No connected displays found. "
+        fprintf(stderr, "[mr_color] WARNING: No connected displays found. "
                 "Scale factor defaults to 1.0x.\n");
         return false;
     }
 
-    fprintf(stderr, "[moonrock_color] Initialized: %d display(s), primary "
+    fprintf(stderr, "[mr_color] Initialized: %d display(s), primary "
             "scale factor %.2fx\n", display_count, displays[0].scale_factor);
     return true;
 }
@@ -512,7 +512,7 @@ void color_shutdown(void)
     // Reset gamma to sRGB default
     current_gamma = 2.2f;
 
-    fprintf(stderr, "[moonrock_color] Shut down.\n");
+    fprintf(stderr, "[mr_color] Shut down.\n");
 }
 
 
@@ -661,7 +661,7 @@ void color_set_gamma(float gamma)
     // and CRTC handles beyond init time, and we need to be careful to restore
     // the original ramp on shutdown.
 
-    fprintf(stderr, "[moonrock_color] Gamma set to %.2f\n", gamma);
+    fprintf(stderr, "[mr_color] Gamma set to %.2f\n", gamma);
 }
 
 
@@ -678,7 +678,7 @@ float color_get_gamma(void)
 bool color_load_icc_profile(const char *path)
 {
     if (!path) {
-        fprintf(stderr, "[moonrock_color] ERROR: NULL ICC profile path.\n");
+        fprintf(stderr, "[mr_color] ERROR: NULL ICC profile path.\n");
         return false;
     }
 
@@ -702,7 +702,7 @@ bool color_load_icc_profile(const char *path)
     // Verify the file exists by trying to open it
     FILE *f = fopen(path, "rb");
     if (!f) {
-        fprintf(stderr, "[moonrock_color] ERROR: Cannot open ICC profile: %s\n",
+        fprintf(stderr, "[mr_color] ERROR: Cannot open ICC profile: %s\n",
                 path);
         return false;
     }
@@ -715,7 +715,7 @@ bool color_load_icc_profile(const char *path)
     fclose(f);
 
     if (read_count < 4) {
-        fprintf(stderr, "[moonrock_color] ERROR: ICC profile too small: %s\n",
+        fprintf(stderr, "[mr_color] ERROR: ICC profile too small: %s\n",
                 path);
         return false;
     }
@@ -727,7 +727,7 @@ bool color_load_icc_profile(const char *path)
                               | ((unsigned int)header[3]);
 
     if (profile_size < 128) {
-        fprintf(stderr, "[moonrock_color] ERROR: ICC profile size too small "
+        fprintf(stderr, "[mr_color] ERROR: ICC profile size too small "
                 "(%u bytes): %s\n", profile_size, path);
         return false;
     }
@@ -736,7 +736,7 @@ bool color_load_icc_profile(const char *path)
     strncpy(icc_profile_path, path, sizeof(icc_profile_path) - 1);
     icc_profile_path[sizeof(icc_profile_path) - 1] = '\0';
 
-    fprintf(stderr, "[moonrock_color] Loaded ICC profile: %s (%u bytes)\n",
+    fprintf(stderr, "[mr_color] Loaded ICC profile: %s (%u bytes)\n",
             path, profile_size);
     return true;
 }

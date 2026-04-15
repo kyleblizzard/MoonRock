@@ -24,9 +24,7 @@
 //
 // ============================================================================
 
-// _GNU_SOURCE is needed so <math.h> defines M_PI (the constant for pi).
-// Without this, M_PI is not available on strict C99/C11 compilers.
-#define _GNU_SOURCE
+// M_PI from <math.h> requires _GNU_SOURCE, which meson provides via -D_GNU_SOURCE.
 
 #include "moonrock_anim.h"
 #include "moonrock_shaders.h"
@@ -160,7 +158,7 @@ void anim_init(void)
     // Zero out the entire array. This sets every slot's 'active' flag to false
     // and every 'type' to ANIM_NONE, so all slots are available.
     memset(animations, 0, sizeof(animations));
-    fprintf(stderr, "[moonrock_anim] Animation system initialized (%d slots)\n",
+    fprintf(stderr, "[mr_anim] Animation system initialized (%d slots)\n",
             MAX_ANIMATIONS);
 }
 
@@ -172,7 +170,7 @@ void anim_shutdown(void)
         animations[i].active = false;
         animations[i].type = ANIM_NONE;
     }
-    fprintf(stderr, "[moonrock_anim] Animation system shut down\n");
+    fprintf(stderr, "[mr_anim] Animation system shut down\n");
 }
 
 
@@ -199,7 +197,7 @@ int anim_start(AnimType type, EaseType easing, double duration,
     // If all slots are occupied, we cannot start a new animation.
     // This should be rare — 16 simultaneous animations is a lot.
     if (slot < 0) {
-        fprintf(stderr, "[moonrock_anim] WARNING: all %d animation slots full, "
+        fprintf(stderr, "[mr_anim] WARNING: all %d animation slots full, "
                 "cannot start animation type %d\n", MAX_ANIMATIONS, type);
         return -1;
     }
@@ -241,7 +239,7 @@ int anim_start(AnimType type, EaseType easing, double duration,
     // Activate the slot — anim_update() and anim_draw() will now process it.
     a->active = true;
 
-    fprintf(stderr, "[moonrock_anim] Started animation type %d in slot %d "
+    fprintf(stderr, "[mr_anim] Started animation type %d in slot %d "
             "(duration=%.2fs, easing=%d)\n", type, slot, duration, easing);
 
     return slot;
@@ -574,7 +572,7 @@ void anim_cancel_for_texture(GLuint texture)
         if (animations[i].active && animations[i].texture == texture) {
             animations[i].active = false;
             animations[i].type = ANIM_NONE;
-            fprintf(stderr, "[moonrock_anim] Cancelled animation in slot %d "
+            fprintf(stderr, "[mr_anim] Cancelled animation in slot %d "
                     "(texture %u destroyed)\n", i, texture);
         }
     }
