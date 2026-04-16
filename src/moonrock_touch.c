@@ -1,7 +1,8 @@
-// Copyright (c) 2026 Kyle Blizzard. All Rights Reserved.
-// This code is publicly visible for portfolio purposes only.
-// Unauthorized copying, forking, or distribution of this file,
-// via any medium, is strictly prohibited.
+// Copyright (c) 2026 Kyle Blizzard
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// MoonRock was created by Kyle Blizzard. Feel free to use it and improve it!
+// www.blizzard.show/moonrock/
 //
 // ============================================================================
 //  MoonRock Touch Input & Display Rotation — implementation

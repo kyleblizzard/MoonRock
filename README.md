@@ -1,9 +1,11 @@
-<!-- Copyright (c) 2026 Kyle Blizzard. All Rights Reserved. -->
-<!-- This code is publicly visible for portfolio purposes only. -->
-<!-- Unauthorized copying, forking, or distribution of this file, -->
-<!-- via any medium, is strictly prohibited. -->
-
 # MoonRock Compositor
+
+MoonRock was created by Kyle Blizzard. Feel free to use it and improve it!
+www.blizzard.show/moonrock/
+
+Licensed under the BSD 3-Clause License. See [LICENSE](LICENSE).
+
+---
 
 MoonRock is a standalone OpenGL compositor for X11 on Linux. The name is a nod to Apple's Quartz Compositor -- same idea, different stack.
 
