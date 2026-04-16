@@ -7,6 +7,8 @@ Licensed under the BSD 3-Clause License. See [LICENSE](LICENSE).
 
 ---
 
+MoonRock is a standalone OpenGL compositor for X11/XLibre on Linux that seeks to meet the standards of Mac OS X Snow Leopard era desktops, while being fully functional in a mobile touch environment. It is built initially optimized for the Lenovo Legion Go S — a gaming handheld running CopiCatOS, a custom Linux distribution I'm developing.
+
 MoonRock targets XLibre, an actively maintained fork of X11. No Wayland. I know that's a hot take in 2026, but Wayland still doesn't give me what I need for this project, and XLibre is solid.
 
 ## How It Works
