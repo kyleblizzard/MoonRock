@@ -110,7 +110,7 @@ static void set_default_theme(void)
     memset(&current_theme, 0, sizeof(current_theme));
 
     strncpy(current_theme.name, "Default", sizeof(current_theme.name) - 1);
-    strncpy(current_theme.author, "CopiCatOS", sizeof(current_theme.author) - 1);
+    strncpy(current_theme.author, "CopyCatOS", sizeof(current_theme.author) - 1);
 
     // Active title bar: light gray gradient (lighter at top, darker at bottom)
     current_theme.titlebar_active_top[0]    = 0.83f;

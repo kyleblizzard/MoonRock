@@ -830,7 +830,7 @@ void mc_draw(CCWM *wm, GLuint basic_shader, float *projection)
         // If the mouse is over this window, draw a blue border around it
         // so the user knows they can click to focus it.
         if (i == mc.hover_window && (mc.active || mc.animating_in)) {
-            // CopiCatOS blue highlight (slightly translucent).
+            // CopyCatOS blue highlight (slightly translucent).
             shaders_set_color(basic_shader, 0.22f, 0.46f, 0.84f, 0.5f * ease);
             // Draw a rectangle slightly larger than the window (4px border).
             shaders_draw_quad(x - 4.0f, y - 4.0f, w + 8.0f, h + 8.0f);
