@@ -8,7 +8,7 @@
 //  MoonRock Plugin & Theme Engine — header
 // ============================================================================
 //
-// This module gives MoonRock Compositor a way to be customized and extended by the user:
+// This module gives CopyCatOS a way to be customized and extended by the user:
 //
 //   1. Theme engine  — Reads .theme files that describe window chrome colors,
 //                      gradients, border widths, shadow properties, fonts, and

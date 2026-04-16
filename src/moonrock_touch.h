@@ -8,7 +8,7 @@
 //  MoonRock Touch Input & Display Rotation — header
 // ============================================================================
 //
-// This module makes MoonRock Compositor work as a tablet-like experience on devices with
+// This module makes CopyCatOS work as a tablet-like experience on devices with
 // touchscreens (primarily the Lenovo Legion Go). It handles three things:
 //
 //   1. Touch-to-pointer translation:

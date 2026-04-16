@@ -4,9 +4,9 @@
 // MoonRock was created by Kyle Blizzard. Feel free to use it and improve it!
 // www.blizzard.show/moonrock/
 //
-// MoonRock Compositor (Phase 1)
+// CopyCatOS — MoonRock Compositor (Phase 1)
 //
-// MoonRock is a built-in OpenGL compositor, replacing picom. Instead of
+// MoonRock is CopyCatOS's built-in OpenGL compositor, replacing picom. Instead of
 // relying on an external program to composite windows, MoonRock handles it
 // directly inside the window manager using OpenGL for GPU-accelerated rendering.
 //

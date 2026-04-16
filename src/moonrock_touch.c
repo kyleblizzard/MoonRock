@@ -8,7 +8,7 @@
 //  MoonRock Touch Input & Display Rotation — implementation
 // ============================================================================
 //
-// This file implements multitouch input handling for MoonRock Compositor using XInput2.
+// This file implements multitouch input handling for CopyCatOS using XInput2.
 //
 // The flow is:
 //   1. touch_init() finds touchscreen hardware via XIQueryDevice and registers

@@ -15,7 +15,7 @@
 // Why "MoonRock"?
 //   Apple's macOS uses "Quartz Compositor" for its window compositing engine.
 //   MoonRock is our playful nod to that — a different kind of clear, beautiful
-//   mineral. It fits the MoonRock Compositor aesthetic of recreating the Snow Leopard look
+//   mineral. It fits the MoonRock aesthetic of recreating the Snow Leopard look
 //   and feel on Linux with our own technology.
 //
 // Why replace picom?
