@@ -7,10 +7,6 @@ Licensed under the BSD 3-Clause License. See [LICENSE](LICENSE).
 
 ---
 
-MoonRock is a standalone OpenGL compositor for X11 on Linux. The name is a nod to Apple's Quartz Compositor -- same idea, different stack.
-
-I built this because I needed it. AuraOS is a pixel-perfect Mac OS X Snow Leopard desktop environment I'm building for the Lenovo Legion Go S (a gaming handheld running Nobara Linux). Getting the compositing right is everything. Window shadows, transparency, animations -- if you get those wrong, the whole illusion falls apart. I looked at picom and other off-the-shelf compositors, and none of them gave me the level of control I needed. Picom is great for what it is, but I couldn't get real Gaussian blur drop shadows cached per window, or frosted glass blur-behind for panels, or a genie minimize animation that actually looks right. So I wrote my own.
-
 MoonRock targets XLibre, an actively maintained fork of X11. No Wayland. I know that's a hot take in 2026, but Wayland still doesn't give me what I need for this project, and XLibre is solid.
 
 ## How It Works
