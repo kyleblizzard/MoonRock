@@ -237,6 +237,10 @@ int anim_start(AnimType type, EaseType easing, double duration,
     // Caller's opaque pointer (may be NULL)
     a->userdata = userdata;
 
+    // No completion callback by default — caller must set on_complete after
+    // anim_start() if they want notification when the animation finishes.
+    a->on_complete = NULL;
+
     // Activate the slot — anim_update() and anim_draw() will now process it.
     a->active = true;
 
@@ -387,7 +391,14 @@ bool anim_update(void)
             a->eased = 1.0f;
 
             // Mark the slot as inactive — it is done and can be reused.
+            // We do this BEFORE the callback so the slot is available if the
+            // callback starts a new animation (e.g., a follow-up transition).
             a->active = false;
+
+            // Notify the caller that the animation finished.
+            // Typical use: hide the window after a genie minimize completes.
+            if (a->on_complete)
+                a->on_complete(a->userdata);
 
             // Don't count this as "active" since it just completed.
             continue;
@@ -554,6 +565,16 @@ void anim_draw(GLuint basic_shader, GLuint genie_shader, float *projection)
 //  Queries and management
 // ============================================================================
 
+void anim_set_on_complete(int slot, void (*fn)(void *userdata))
+{
+    // Validate the slot index — ignore out-of-range values silently.
+    if (slot < 0 || slot >= MAX_ANIMATIONS) return;
+
+    // Attach the callback. The animation system will call fn(animations[slot].userdata)
+    // when progress reaches 1.0 in anim_update().
+    animations[slot].on_complete = fn;
+}
+
 bool anim_any_active(void)
 {
     // Simple scan: return true as soon as we find any active slot.
@@ -566,15 +587,23 @@ bool anim_any_active(void)
 
 void anim_cancel_for_texture(GLuint texture)
 {
-    // When a window is destroyed, we must stop any animations that reference
-    // its texture — otherwise anim_draw() would try to bind a deleted texture,
-    // which would either show garbage or crash.
+    // When a window's texture is being destroyed (either because the window
+    // closed or was minimized and the compositor released the texture), we must
+    // stop any animations referencing it. anim_draw() draws slots that are
+    // active OR completed-this-frame (progress==1.0), so we must clear both.
+    //
+    // We also zero out the progress so anim_draw()'s completion check
+    //   "if (!a->active && a->progress < 1.0f) continue;"
+    // will correctly skip this slot after we clear it.
     for (int i = 0; i < MAX_ANIMATIONS; i++) {
-        if (animations[i].active && animations[i].texture == texture) {
-            animations[i].active = false;
-            animations[i].type = ANIM_NONE;
+        if (animations[i].texture == texture &&
+            (animations[i].active || animations[i].progress >= 1.0f)) {
+            animations[i].active   = false;
+            animations[i].type     = ANIM_NONE;
+            animations[i].progress = 0.0f;
+            animations[i].texture  = 0;
             fprintf(stderr, "[mr_anim] Cancelled animation in slot %d "
-                    "(texture %u destroyed)\n", i, texture);
+                    "(texture %u released)\n", i, texture);
         }
     }
 }

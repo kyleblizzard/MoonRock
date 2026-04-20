@@ -88,28 +88,34 @@
 // SHADOW_RADIUS is the Gaussian blur spread in pixels — bigger means a softer,
 // wider shadow.
 //
+// Values measured from real Snow Leopard reference screenshots using a pixel
+// sampler tool (see snowleopardaura/aquadesignthoughts.txt). The spec is:
+//   RGBA(0,0,0,0.4), 20px blur, 3px Y-offset
+//
 // SHADOW_Y_OFFSET shifts the shadow downward, simulating light coming from
 // directly above the screen (like a desk lamp). This means the shadow peeks
 // out more at the bottom than the top, which looks natural.
 
-#define SHADOW_RADIUS             22
-#define SHADOW_Y_OFFSET            4
+#define SHADOW_RADIUS             20    // Snow Leopard spec: 20px blur
+#define SHADOW_Y_OFFSET            3    // Snow Leopard spec: 3px downward shift
 
 // How far the shadow extends past the window chrome on each side.
 // Top is reduced because the shadow shifts down; bottom is increased.
-#define SHADOW_TOP                (SHADOW_RADIUS - SHADOW_Y_OFFSET)   // 18 px
-#define SHADOW_BOTTOM             (SHADOW_RADIUS + SHADOW_Y_OFFSET)   // 26 px
-#define SHADOW_LEFT                SHADOW_RADIUS                       // 22 px
-#define SHADOW_RIGHT               SHADOW_RADIUS                       // 22 px
+#define SHADOW_TOP                (SHADOW_RADIUS - SHADOW_Y_OFFSET)   // 17 px
+#define SHADOW_BOTTOM             (SHADOW_RADIUS + SHADOW_Y_OFFSET)   // 23 px
+#define SHADOW_LEFT                SHADOW_RADIUS                       // 20 px
+#define SHADOW_RIGHT               SHADOW_RADIUS                       // 20 px
 
 // Peak alpha (opacity) for the shadow.
 // Active (focused) windows get a stronger, more prominent shadow.
 // Inactive windows get a softer shadow so they recede visually.
 // Values: 0.0 = invisible, 1.0 = fully opaque black.
-#define SHADOW_ALPHA_ACTIVE        0.45
-#define SHADOW_ALPHA_INACTIVE      0.22
+// Snow Leopard spec: active = 0.40 (RGBA(0,0,0,0.4)), inactive ≈ half
+#define SHADOW_ALPHA_ACTIVE        0.40    // Snow Leopard spec: 0.40
+#define SHADOW_ALPHA_INACTIVE      0.20    // Inactive: half the active density
 
 // Inactive windows also use a smaller blur radius for a tighter, subtler look.
+// 16px (80% of 20) matches the "receding" feel of inactive Snow Leopard windows.
 #define SHADOW_RADIUS_INACTIVE     16
 
 

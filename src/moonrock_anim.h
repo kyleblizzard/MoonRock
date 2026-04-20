@@ -156,6 +156,14 @@ typedef struct {
     // object this animation belongs to. The animation system never dereferences
     // this — it just stores it so the caller can retrieve it later.
     void *userdata;
+
+    // --- Completion callback ---
+    // If non-NULL, called once when the animation reaches progress 1.0.
+    // Receives 'userdata' as its argument. Use this to perform post-animation
+    // work like hiding a window after a genie minimize completes.
+    // The callback is called BEFORE the slot is marked inactive, so any
+    // animation query inside the callback will still see this one as active.
+    void (*on_complete)(void *userdata);
 } Animation;
 
 
@@ -289,7 +297,21 @@ bool anim_any_active(void);
 // Cancel all animations that are using a specific texture.
 // Call this when a window is destroyed or unmapped to prevent the animation
 // system from drawing a texture that no longer exists.
+// Also clears completed-but-not-yet-flushed animation slots (progress==1.0,
+// active==false) so anim_draw() won't try to bind a deleted GL texture.
 void anim_cancel_for_texture(GLuint texture);
+
+// Attach a completion callback to an animation slot.
+// 'slot' is the value returned by anim_start() or one of the convenience
+// functions. 'fn' will be called with 'userdata' when the animation finishes.
+// If 'slot' is invalid (< 0 or out of range), this is a no-op.
+//
+// Use this pattern to set userdata + on_complete after an anim_start() call:
+//   int slot = anim_genie_minimize(tex, ...);
+//   anim_set_on_complete(slot, my_callback, my_data);
+// Note: anim_genie_minimize passes NULL as userdata — you must also call
+// anim_start() directly if you need custom userdata with a callback.
+void anim_set_on_complete(int slot, void (*fn)(void *userdata));
 
 
 // ============================================================================

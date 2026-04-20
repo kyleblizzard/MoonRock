@@ -26,12 +26,20 @@
 #include "moonrock_display.h"
 #include "wm_compat.h"
 
+// Public contract for the MoonRock -> shell scale bridge. We only need the
+// atom name from it here — the parser and subscribe helpers are client-side.
+#include "moonrock_scale.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <errno.h>
+#include <math.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
+#include <pwd.h>
 
 // XRandR — the X11 extension for querying and configuring display outputs.
 // It tells us what monitors are connected, their resolutions, refresh rates,
@@ -78,11 +86,11 @@ static int output_count = 0;
 #define MAX_OUTPUTS 16
 
 // The current gaming mode — see the GameMode enum in the header.
+// OFF = normal compositing. BYPASS = direct scanout on the primary output
+// for a single fullscreen client (forward-looking for multi-monitor direct
+// scanout). No in-session gamescope path — that's handled by the dedicated
+// gaming SDDM session now.
 static GameMode current_game_mode = GAME_MODE_OFF;
-
-// PID of the gamescope child process (0 if not running).
-// We track this so we can wait for it to exit when returning from gamescope.
-static pid_t gamescope_pid = 0;
 
 // The window currently using direct scanout (None if not active).
 static Window direct_scanout_win = None;
@@ -115,6 +123,378 @@ static double get_time(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1.0e9;
+}
+
+
+// ============================================================================
+//  Per-output scale: EDID hashing, PPI bands, user-override persistence
+// ============================================================================
+//
+// The CopyCatOS HiDPI mandate (CLAUDE.md → HiDPI & Display Scaling) requires
+// per-output scale factors, fractional from day one (1.0, 1.25, 1.5, 1.75,
+// 2.0, …), keyed by EDID hash so the same monitor gets the same scale across
+// reboots, dock/undock cycles, and cable swaps. This block owns all of that.
+//
+// Data model:
+//
+//   outputs[i].edid_hash    — 64-bit FNV-1a hash of the raw EDID blob.
+//   outputs[i].mm_width/_height — physical panel size from EDID.
+//   outputs[i].default_scale — picked from PPI bands the first time we see
+//                               a given monitor. Never written to disk.
+//   outputs[i].user_scale    — user's persisted override, or 0.0 if none.
+//                               Loaded from disk at init, written from
+//                               display_set_scale_for_output().
+//   outputs[i].scale         — the effective scale right now
+//                               (= user_scale ? user_scale : default_scale).
+//
+// Persistence file: ~/.local/share/moonrock/display-scales.conf
+//
+//   # MoonRock per-display scale overrides (EDID hash -> scale)
+//   a1b2c3d4e5f60718=1.5
+//   deadbeefcafebabe=2.0
+//
+// Simple text so it's trivial to inspect, hand-edit, or rewrite from the
+// future systemcontrol Displays pane. Lines starting with '#' are comments.
+
+
+// In-memory override table, loaded once at init, rewritten on every set.
+// Capped well above what any real machine would plug in over its lifetime
+// — we're just guarding against an unbounded grow if a user cycles through
+// a lot of monitors.
+#define MAX_SCALE_OVERRIDES 64
+
+typedef struct {
+    uint8_t edid_hash[8];   // EDID hash this override belongs to
+    float   scale;          // user-chosen scale (1.0, 1.25, 1.5, …)
+} ScaleOverride;
+
+static ScaleOverride scale_overrides[MAX_SCALE_OVERRIDES];
+static int scale_override_count = 0;
+static bool scale_overrides_loaded = false;
+
+
+// FNV-1a 64-bit hash. No dependencies, well-behaved avalanche on
+// short inputs (EDIDs are 128+ bytes), and the 64-bit digest is more than
+// enough to distinguish every display a user will ever own.
+static void fnv1a_64(const uint8_t *data, size_t len, uint8_t out[8])
+{
+    uint64_t h = 0xcbf29ce484222325ULL;     // FNV-1a 64-bit offset basis
+    const uint64_t prime = 0x100000001b3ULL; // FNV-1a 64-bit prime
+    for (size_t i = 0; i < len; i++) {
+        h ^= (uint64_t)data[i];
+        h *= prime;
+    }
+    // Emit big-endian so the hex string reads left-to-right in the order
+    // the bytes are printed. No semantic difference — just keeps the
+    // persistence file easier to diff.
+    for (int i = 7; i >= 0; i--) {
+        out[i] = (uint8_t)(h & 0xffu);
+        h >>= 8;
+    }
+}
+
+// Hex-encode an EDID hash into a 17-byte string (16 hex chars + '\0').
+static void hash_to_hex(const uint8_t h[8], char out[17])
+{
+    static const char *hex = "0123456789abcdef";
+    for (int i = 0; i < 8; i++) {
+        out[i * 2 + 0] = hex[(h[i] >> 4) & 0xf];
+        out[i * 2 + 1] = hex[h[i] & 0xf];
+    }
+    out[16] = '\0';
+}
+
+// Parse a 16-char hex string into 8 bytes. Returns true on success.
+static bool hex_to_hash(const char *s, uint8_t out[8])
+{
+    for (int i = 0; i < 8; i++) {
+        unsigned hi = 0, lo = 0;
+        char c = s[i * 2 + 0];
+        if (c >= '0' && c <= '9') hi = (unsigned)(c - '0');
+        else if (c >= 'a' && c <= 'f') hi = (unsigned)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') hi = (unsigned)(c - 'A' + 10);
+        else return false;
+        c = s[i * 2 + 1];
+        if (c >= '0' && c <= '9') lo = (unsigned)(c - '0');
+        else if (c >= 'a' && c <= 'f') lo = (unsigned)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') lo = (unsigned)(c - 'A' + 10);
+        else return false;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return true;
+}
+
+
+// Derive the default scale factor for a display from its PPI (pixels per
+// inch). Bands from CLAUDE.md → HiDPI & Display Scaling:
+//
+//     ≲160  → 1.00   (desktop monitors, old external displays)
+//   160-210 → 1.25
+//   210-260 → 1.50   (Legion Go S 7" 1920x1200 ≈ 323 PPI falls higher)
+//   260-320 → 1.75
+//     ≥320  → 2.00
+//
+// If we can't determine the PPI (EDID missing physical dimensions, which
+// happens on some projectors and virtual monitors), fall back to 1.0 —
+// the safest default, better to under-scale than ship a tiny UI.
+static float default_scale_from_ppi(int px_w, int px_h,
+                                    int mm_w, int mm_h)
+{
+    if (mm_w <= 0 || mm_h <= 0 || px_w <= 0 || px_h <= 0) return 1.0f;
+    // Diagonal PPI so ultra-wide 21:9 panels don't misreport vs. 16:9.
+    double inches_w = (double)mm_w / 25.4;
+    double inches_h = (double)mm_h / 25.4;
+    double diag_px = sqrt((double)px_w * px_w + (double)px_h * px_h);
+    double diag_in = sqrt(inches_w * inches_w + inches_h * inches_h);
+    if (diag_in <= 0.0) return 1.0f;
+    double ppi = diag_px / diag_in;
+
+    if (ppi < 160.0) return 1.00f;
+    if (ppi < 210.0) return 1.25f;
+    if (ppi < 260.0) return 1.50f;
+    if (ppi < 320.0) return 1.75f;
+    return 2.00f;
+}
+
+
+// Resolve the override file path into a caller-owned buffer. Honors
+// XDG_DATA_HOME, falling back to ~/.local/share as the spec requires.
+// Returns true on success.
+static bool scale_override_path(char *out, size_t out_len)
+{
+    const char *xdg = getenv("XDG_DATA_HOME");
+    if (xdg && *xdg) {
+        int n = snprintf(out, out_len,
+                         "%s/moonrock/display-scales.conf", xdg);
+        return n > 0 && (size_t)n < out_len;
+    }
+    const char *home = getenv("HOME");
+    if (!home || !*home) {
+        struct passwd *pw = getpwuid(getuid());
+        if (!pw || !pw->pw_dir) return false;
+        home = pw->pw_dir;
+    }
+    int n = snprintf(out, out_len,
+                     "%s/.local/share/moonrock/display-scales.conf", home);
+    return n > 0 && (size_t)n < out_len;
+}
+
+// Best-effort mkdir -p of the directory portion of `path`. Silent on errors
+// — the caller's subsequent open will fail loudly if directory creation
+// didn't work out.
+static void ensure_parent_dir(const char *path)
+{
+    char buf[512];
+    size_t n = strlen(path);
+    if (n == 0 || n >= sizeof(buf)) return;
+    memcpy(buf, path, n + 1);
+    // Walk forwards, creating each intermediate component.
+    for (size_t i = 1; i < n; i++) {
+        if (buf[i] == '/') {
+            buf[i] = '\0';
+            (void)mkdir(buf, 0755);
+            buf[i] = '/';
+        }
+    }
+    // Create the final path component (the file's parent directory itself).
+    for (ssize_t i = (ssize_t)n - 1; i >= 0; i--) {
+        if (buf[i] == '/') {
+            buf[i] = '\0';
+            (void)mkdir(buf, 0755);
+            break;
+        }
+    }
+}
+
+// Load the persisted overrides from disk into scale_overrides[]. Called
+// exactly once per process — subsequent display_init()s (e.g. from hotplug)
+// skip the disk read since the in-memory table is the source of truth
+// after startup.
+static void load_scale_overrides_once(void)
+{
+    if (scale_overrides_loaded) return;
+    scale_overrides_loaded = true;
+    scale_override_count = 0;
+
+    char path[512];
+    if (!scale_override_path(path, sizeof(path))) return;
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) return; // First run or permission denied — treat as empty.
+
+    char line[128];
+    while (fgets(line, sizeof(line), fp)
+        && scale_override_count < MAX_SCALE_OVERRIDES) {
+        // Strip leading whitespace + comment + empty lines.
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\n' || *p == '\0') continue;
+
+        // Expected format: 16 hex chars, '=', float, newline.
+        if (strlen(p) < 18 || p[16] != '=') continue;
+
+        uint8_t hash[8];
+        if (!hex_to_hash(p, hash)) continue;
+
+        float val = strtof(p + 17, NULL);
+        if (val <= 0.0f || val > 4.0f) continue; // Reject nonsense.
+
+        ScaleOverride *o = &scale_overrides[scale_override_count++];
+        memcpy(o->edid_hash, hash, 8);
+        o->scale = val;
+    }
+    fclose(fp);
+    fprintf(stderr,
+            "[display] Loaded %d scale override(s) from %s\n",
+            scale_override_count, path);
+}
+
+// Find a persisted override for the given EDID hash. Returns scale or 0.0
+// if no override is set.
+static float find_override_scale(const uint8_t edid_hash[8])
+{
+    for (int i = 0; i < scale_override_count; i++) {
+        if (memcmp(scale_overrides[i].edid_hash, edid_hash, 8) == 0) {
+            return scale_overrides[i].scale;
+        }
+    }
+    return 0.0f;
+}
+
+// Write the override table back to disk. Atomic: write to .tmp + rename.
+// Returns true on success, false if either the write or the rename fails.
+static bool save_scale_overrides(void)
+{
+    char path[512];
+    if (!scale_override_path(path, sizeof(path))) return false;
+    ensure_parent_dir(path);
+
+    char tmp[576];
+    int n = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    if (n <= 0 || (size_t)n >= sizeof(tmp)) return false;
+
+    FILE *fp = fopen(tmp, "w");
+    if (!fp) {
+        fprintf(stderr, "[display] save scale overrides: fopen(%s): %s\n",
+                tmp, strerror(errno));
+        return false;
+    }
+
+    fprintf(fp,
+            "# MoonRock per-display scale overrides (EDID hash -> scale)\n"
+            "# Written by MoonRock. Hand-edit at your own risk.\n");
+    for (int i = 0; i < scale_override_count; i++) {
+        char hex[17];
+        hash_to_hex(scale_overrides[i].edid_hash, hex);
+        fprintf(fp, "%s=%.3f\n", hex, (double)scale_overrides[i].scale);
+    }
+    if (fflush(fp) != 0 || fclose(fp) != 0) {
+        fprintf(stderr, "[display] save scale overrides: write failed\n");
+        unlink(tmp);
+        return false;
+    }
+
+    if (rename(tmp, path) != 0) {
+        fprintf(stderr, "[display] save scale overrides: rename(%s,%s): %s\n",
+                tmp, path, strerror(errno));
+        unlink(tmp);
+        return false;
+    }
+    return true;
+}
+
+// Read the raw EDID blob for an output into a caller-allocated buffer.
+// Returns the number of bytes actually read (0 on failure). EDID blocks
+// are 128 bytes; monitors with CEA-861 extensions add blocks of 128 bytes
+// each. We pull up to 512 bytes to cover any sane extension count.
+static size_t read_edid_blob(Display *dpy, RROutput output,
+                             uint8_t *buf, size_t buf_len)
+{
+    Atom edid_atom = XInternAtom(dpy, "EDID", True);
+    if (edid_atom == None) return 0;
+
+    Atom actual_type = None;
+    int actual_format = 0;
+    unsigned long nitems = 0, bytes_after = 0;
+    unsigned char *data = NULL;
+
+    int status = XRRGetOutputProperty(
+        dpy, output, edid_atom,
+        0, 128,                 // 128 x 32-bit words covers typical EDIDs
+        False, False, AnyPropertyType,
+        &actual_type, &actual_format,
+        &nitems, &bytes_after, &data);
+
+    if (status != Success || !data || nitems < 128) {
+        if (data) XFree(data);
+        return 0;
+    }
+
+    size_t take = (size_t)nitems;
+    if (take > buf_len) take = buf_len;
+    memcpy(buf, data, take);
+    XFree(data);
+    return take;
+}
+
+
+// ============================================================================
+//  Publish scales to the root window
+// ============================================================================
+//
+// Shell components (menubar, dock, desktop, systemcontrol) are standalone
+// X11 processes. MoonRock is the single source of truth for per-output
+// scale, but those components can't link against MoonRock's C API. The
+// bridge is a line-oriented UTF-8 property on the root window, written
+// under the atom _MOONROCK_OUTPUT_SCALES. Every connected output emits
+// one newline-terminated line:
+//
+//     <name> <x> <y> <width> <height> <scale>
+//
+// Xlib converts a root-property write into a PropertyNotify event on every
+// client that has PropertyChangeMask selected on the root window, so
+// subscribers get live updates automatically — no new socket, no new
+// daemon. See moonrock/shell-api/moonrock_scale.h for the reader side.
+//
+// Callers: end of display_init() (covers startup and hotplug, since
+// display_handle_hotplug() re-enters display_init) and end of
+// display_set_scale_for_output() (covers SysPrefs changing user scale).
+static void publish_scales_to_root(void)
+{
+    if (!display_dpy || display_root == None) return;
+
+    // Assemble the payload. MOONROCK_SCALE_MAX_OUTPUTS * ~80 bytes per
+    // line is still comfortably under a few KB — a 4096-byte stack buffer
+    // matches what the client side requests in one XGetWindowProperty().
+    char buf[4096];
+    size_t pos = 0;
+
+    for (int i = 0; i < output_count && pos < sizeof(buf); i++) {
+        int n = snprintf(buf + pos, sizeof(buf) - pos,
+                         "%s %d %d %d %d %.3f\n",
+                         outputs[i].name,
+                         outputs[i].x, outputs[i].y,
+                         outputs[i].width, outputs[i].height,
+                         (double)outputs[i].scale);
+        if (n < 0) break;
+        if ((size_t)n >= sizeof(buf) - pos) {
+            // Line didn't fit — stop here rather than emit a truncated
+            // line the parser might mis-read.
+            break;
+        }
+        pos += (size_t)n;
+    }
+
+    Atom prop = XInternAtom(display_dpy, MOONROCK_SCALE_ATOM_NAME, False);
+    Atom utf8 = XInternAtom(display_dpy, "UTF8_STRING", False);
+
+    XChangeProperty(display_dpy, display_root, prop, utf8, 8,
+                    PropModeReplace, (unsigned char *)buf, (int)pos);
+    XFlush(display_dpy);
+
+    fprintf(stderr, "[display] Published %d scale entr%s to %s (%zu bytes)\n",
+            output_count, output_count == 1 ? "y" : "ies",
+            MOONROCK_SCALE_ATOM_NAME, pos);
 }
 
 
@@ -165,6 +545,12 @@ bool display_init(Display *dpy, int screen)
             return false;
         }
     }
+
+    // Load persisted per-display scale overrides exactly once. Hotplugs
+    // re-enter display_init() but don't re-read the file — the in-memory
+    // table stays authoritative so a set from SysPrefs is never clobbered
+    // by a concurrent hotplug re-enumeration.
+    load_scale_overrides_once();
 
     // Ask XRandR for the current screen resources. This is the top-level
     // structure that lists all outputs, CRTCs, and available modes.
@@ -306,9 +692,52 @@ bool display_init(Display *dpy, int screen)
             if (prop_data) XFree(prop_data);
         }
 
-        fprintf(stderr, "[display] Output %d: %s — %dx%d @ %dHz (pos %d,%d)%s%s\n",
+        // ── Physical size (from EDID via XRROutputInfo) ──
+        //
+        // The X server parses EDID bytes 21–22 (max image size in cm) and
+        // exposes them as mm_width / mm_height on the output info struct.
+        // Zero here means EDID didn't advertise physical dimensions, which
+        // happens on projectors, KVMs, and some virtual monitors — we'll
+        // fall back to 1.0× scale in default_scale_from_ppi() below.
+        out->mm_width  = (int)oi->mm_width;
+        out->mm_height = (int)oi->mm_height;
+
+        // ── EDID hash for per-monitor persistence ──
+        //
+        // Read the raw EDID blob and compute a 64-bit FNV-1a hash of it.
+        // The hash is the key in our display-scales.conf persistence file:
+        // same monitor plugged into any port on any day → same scale.
+        // If we can't read EDID (shouldn't happen on real hardware, but
+        // does on headless CI and some nested X servers), hash stays zero
+        // and the output gets the default scale with no persistence.
+        uint8_t edid[512];
+        size_t edid_len = read_edid_blob(dpy, res->outputs[i], edid, sizeof(edid));
+        memset(out->edid_hash, 0, sizeof(out->edid_hash));
+        if (edid_len > 0) {
+            fnv1a_64(edid, edid_len, out->edid_hash);
+        }
+
+        // ── Scale selection ──
+        //
+        // default_scale: picked from PPI bands.
+        // user_scale:    persisted override if one exists for this EDID.
+        // scale:         the effective value (user_scale if non-zero,
+        //                otherwise default_scale).
+        out->default_scale = default_scale_from_ppi(
+            out->width, out->height, out->mm_width, out->mm_height);
+        out->user_scale = (edid_len > 0)
+                            ? find_override_scale(out->edid_hash)
+                            : 0.0f;
+        out->scale = (out->user_scale > 0.0f)
+                        ? out->user_scale
+                        : out->default_scale;
+
+        fprintf(stderr,
+                "[display] Output %d: %s — %dx%d @ %dHz (pos %d,%d) "
+                "scale=%.2f%s%s%s\n",
                 output_count, out->name, out->width, out->height,
-                out->refresh_hz, out->x, out->y,
+                out->refresh_hz, out->x, out->y, (double)out->scale,
+                out->user_scale > 0.0f ? " [user]" : " [default]",
                 out->primary ? " [primary]" : "",
                 out->vrr_capable ? " [VRR]" : "");
 
@@ -351,6 +780,11 @@ bool display_init(Display *dpy, int screen)
                    RRScreenChangeNotifyMask |
                    RROutputChangeNotifyMask |
                    RRCrtcChangeNotifyMask);
+
+    // Publish the per-output scale table to the root window so standalone
+    // shell components can pick it up without calling into us. Covers
+    // hotplug too because display_handle_hotplug() re-enters display_init.
+    publish_scales_to_root();
 
     fprintf(stderr, "[display] Initialized: %d output(s)\n", output_count);
     return true;
@@ -589,6 +1023,95 @@ int display_get_viewport_for_output(MROutput *output,
 
 
 // ============================================================================
+//  Per-output scale accessors (HiDPI)
+// ============================================================================
+
+float display_get_scale_for_output(const MROutput *output)
+{
+    // Callers forward NULL when the window has no hosting output yet
+    // (e.g., orphaned after a hotplug). 1.0 is the sensible fallback —
+    // apps treat points and pixels as equivalent at that scale.
+    if (!output) return 1.0f;
+    return output->scale > 0.0f ? output->scale : 1.0f;
+}
+
+float display_get_primary_scale(void)
+{
+    return display_get_scale_for_output(display_get_primary());
+}
+
+bool display_set_scale_for_output(MROutput *output, float scale)
+{
+    if (!output) return false;
+
+    // Zero (or negative) clears the override and reverts to the default.
+    // Reject out-of-range to keep the persistence file sane if a buggy
+    // caller ever reaches here.
+    bool clear = (scale <= 0.0f);
+    if (!clear && (scale < 0.5f || scale > 4.0f)) {
+        fprintf(stderr,
+                "[display] Rejecting out-of-range scale %.3f for %s\n",
+                (double)scale, output->name);
+        return false;
+    }
+
+    // Update the in-memory overrides table.
+    bool found = false;
+    for (int i = 0; i < scale_override_count; i++) {
+        if (memcmp(scale_overrides[i].edid_hash,
+                   output->edid_hash, 8) == 0) {
+            if (clear) {
+                // Remove this entry by shifting the tail down. O(N), but
+                // N is tiny.
+                for (int j = i; j < scale_override_count - 1; j++) {
+                    scale_overrides[j] = scale_overrides[j + 1];
+                }
+                scale_override_count--;
+            } else {
+                scale_overrides[i].scale = scale;
+            }
+            found = true;
+            break;
+        }
+    }
+    if (!found && !clear) {
+        if (scale_override_count >= MAX_SCALE_OVERRIDES) {
+            fprintf(stderr,
+                    "[display] Scale override table full (%d) — dropping oldest\n",
+                    MAX_SCALE_OVERRIDES);
+            // Simple FIFO eviction so a user who cycles a lot of monitors
+            // doesn't permanently jam the table.
+            for (int j = 0; j < scale_override_count - 1; j++) {
+                scale_overrides[j] = scale_overrides[j + 1];
+            }
+            scale_override_count--;
+        }
+        ScaleOverride *o = &scale_overrides[scale_override_count++];
+        memcpy(o->edid_hash, output->edid_hash, 8);
+        o->scale = scale;
+    }
+
+    // Propagate the change to every currently-enumerated output sharing
+    // the same EDID (same physical monitor on a different port, mirrored
+    // clones, etc.).
+    for (int i = 0; i < output_count; i++) {
+        if (memcmp(outputs[i].edid_hash, output->edid_hash, 8) == 0) {
+            outputs[i].user_scale = clear ? 0.0f : scale;
+            outputs[i].scale = (outputs[i].user_scale > 0.0f)
+                                 ? outputs[i].user_scale
+                                 : outputs[i].default_scale;
+        }
+    }
+
+    // Rewrite the shell-facing property so live subscribers (menubar, dock,
+    // desktop) see the new scale immediately via PropertyNotify.
+    publish_scales_to_root();
+
+    return save_scale_overrides();
+}
+
+
+// ============================================================================
 //  Gaming mode
 // ============================================================================
 
@@ -596,7 +1119,7 @@ void display_set_game_mode(GameMode mode)
 {
     if (mode == current_game_mode) return;
 
-    const char *mode_names[] = { "OFF", "BYPASS", "GAMESCOPE" };
+    const char *mode_names[] = { "OFF", "BYPASS" };
     fprintf(stderr, "[display] Game mode: %s -> %s\n",
             mode_names[current_game_mode], mode_names[mode]);
 
@@ -606,13 +1129,6 @@ void display_set_game_mode(GameMode mode)
             // Leaving bypass mode — disable direct scanout so the compositor
             // takes over rendering again.
             display_disable_direct_scanout();
-            break;
-
-        case GAME_MODE_GAMESCOPE:
-            // Leaving gamescope mode — make sure the gamescope process is
-            // cleaned up. This is a non-blocking check; if gamescope is still
-            // running, display_return_from_gamescope() will handle it.
-            display_return_from_gamescope();
             break;
 
         case GAME_MODE_OFF:
@@ -866,149 +1382,6 @@ bool display_check_direct_scanout(CCWM *wm)
 
 
 // ============================================================================
-//  gamescope integration
-// ============================================================================
-
-bool display_launch_gamescope(const char *game_command)
-{
-    if (!game_command || game_command[0] == '\0') {
-        fprintf(stderr, "[display] ERROR: No game command provided for gamescope\n");
-        return false;
-    }
-
-    // Don't launch a second gamescope if one is already running.
-    if (gamescope_pid > 0) {
-        // Check if the previous gamescope is still alive.
-        int status;
-        pid_t result = waitpid(gamescope_pid, &status, WNOHANG);
-        if (result == 0) {
-            // Still running — refuse to launch another.
-            fprintf(stderr, "[display] gamescope is already running (PID %d)\n",
-                    gamescope_pid);
-            return false;
-        }
-        // It exited — clear the PID so we can launch a new one.
-        gamescope_pid = 0;
-    }
-
-    MROutput *primary = display_get_primary();
-    if (!primary) {
-        fprintf(stderr, "[display] ERROR: No primary output for gamescope\n");
-        return false;
-    }
-
-    // Build the gamescope command line.
-    //
-    // gamescope flags:
-    //   -W <width>    — Output width (match the primary display).
-    //   -H <height>   — Output height (match the primary display).
-    //   -r <rate>     — Refresh rate limit (match the display's max Hz).
-    //   --adaptive-sync — Enable FreeSync/VRR within gamescope.
-    //   -- <command>  — Everything after "--" is the game to launch.
-    // SECURITY: Build argv array instead of passing through a shell.
-    // Using "sh -c" with user-supplied strings is a command injection
-    // vulnerability. Instead, we use execvp() with a proper argv array
-    // where game_command is passed as a single argument, not interpreted
-    // by a shell.
-    char w_str[16], h_str[16], r_str[16];
-    snprintf(w_str, sizeof(w_str), "%d", primary->width);
-    snprintf(h_str, sizeof(h_str), "%d", primary->height);
-    snprintf(r_str, sizeof(r_str), "%d", primary->refresh_hz);
-
-    fprintf(stderr, "[display] Launching gamescope: -W %s -H %s -r %s --adaptive-sync -- %s\n",
-            w_str, h_str, r_str, game_command);
-
-    // Fork a child process to run gamescope.
-    pid_t pid = fork();
-
-    if (pid < 0) {
-        perror("[display] fork failed");
-        return false;
-    }
-
-    if (pid == 0) {
-        // ── Child process ──
-        setsid();
-
-        // SECURITY: Use execvp with an argv array — NO shell interpretation.
-        // game_command is passed as a single argument after "--", so even if
-        // it contains shell metacharacters (;, |, $, etc.), they are treated
-        // as literal characters, not shell commands.
-        execlp("gamescope", "gamescope",
-               "-W", w_str, "-H", h_str, "-r", r_str,
-               "--adaptive-sync", "--", game_command, NULL);
-
-        // If we get here, execlp() failed
-        perror("[display] execlp failed");
-        _exit(1);
-    }
-
-    // ── Parent process ──
-    //
-    // Store the child PID so we can check on it later (waitpid) and so
-    // display_return_from_gamescope() knows what to wait for.
-    gamescope_pid = pid;
-    display_set_game_mode(GAME_MODE_GAMESCOPE);
-
-    fprintf(stderr, "[display] gamescope launched (PID %d)\n", gamescope_pid);
-    return true;
-}
-
-void display_return_from_gamescope(void)
-{
-    if (gamescope_pid <= 0) return;
-
-    // Check if gamescope has already exited.
-    // WNOHANG means "don't block — just check and return immediately."
-    int status;
-    pid_t result = waitpid(gamescope_pid, &status, WNOHANG);
-
-    if (result == 0) {
-        // gamescope is still running. Send it SIGTERM (polite shutdown request)
-        // and wait for it to exit gracefully.
-        fprintf(stderr, "[display] Asking gamescope (PID %d) to exit...\n",
-                gamescope_pid);
-        kill(gamescope_pid, SIGTERM);
-
-        // Wait up to 5 seconds for gamescope to shut down.
-        // We check every 100ms to avoid blocking the WM for too long.
-        for (int i = 0; i < 50; i++) {
-            usleep(100000);  // 100ms
-            result = waitpid(gamescope_pid, &status, WNOHANG);
-            if (result != 0) break;
-        }
-
-        // If it still hasn't exited after 5 seconds, force-kill it.
-        if (result == 0) {
-            fprintf(stderr, "[display] gamescope did not exit — sending SIGKILL\n");
-            kill(gamescope_pid, SIGKILL);
-            waitpid(gamescope_pid, &status, 0);  // Block until dead
-        }
-    }
-
-    // Log the exit status for debugging.
-    if (WIFEXITED(status)) {
-        fprintf(stderr, "[display] gamescope exited with code %d\n",
-                WEXITSTATUS(status));
-    } else if (WIFSIGNALED(status)) {
-        fprintf(stderr, "[display] gamescope killed by signal %d\n",
-                WTERMSIG(status));
-    }
-
-    gamescope_pid = 0;
-
-    // Switch back to normal compositing mode if we were in gamescope mode.
-    // Note: we set current_game_mode directly here instead of calling
-    // display_set_game_mode() to avoid infinite recursion (set_game_mode
-    // calls return_from_gamescope when transitioning out of GAMESCOPE mode).
-    if (current_game_mode == GAME_MODE_GAMESCOPE) {
-        current_game_mode = GAME_MODE_OFF;
-        fprintf(stderr, "[display] Resumed MoonRock compositing\n");
-    }
-}
-
-
-// ============================================================================
 //  PipeWire screencast (stubs)
 // ============================================================================
 //
@@ -1077,8 +1450,6 @@ void display_shutdown(void)
     // Clean up any active gaming mode state.
     if (current_game_mode == GAME_MODE_BYPASS) {
         display_disable_direct_scanout();
-    } else if (current_game_mode == GAME_MODE_GAMESCOPE) {
-        display_return_from_gamescope();
     }
     current_game_mode = GAME_MODE_OFF;
 
@@ -1096,7 +1467,6 @@ void display_shutdown(void)
     display_dpy = NULL;
     display_root = None;
     direct_scanout_win = None;
-    gamescope_pid = 0;
 
     // Reset frame timing state.
     frame_start = 0.0;

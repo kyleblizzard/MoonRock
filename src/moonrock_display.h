@@ -5,7 +5,7 @@
 // www.blizzard.show/moonrock/
 //
 // ============================================================================
-//  MoonRock Display Management — VRR, Multi-Monitor, Direct Scanout, Gaming
+//  MoonRock Display Management — VRR, Multi-Monitor, Direct Scanout
 // ============================================================================
 //
 // This module handles everything related to display outputs and how MoonRock
@@ -37,15 +37,15 @@
 //      to read directly from the application's buffer, bypassing compositing
 //      entirely. This reduces latency and saves power.
 //
-//   5. GAMESCOPE INTEGRATION — gamescope is Valve's micro-compositor designed
-//      for gaming on Linux (used in SteamOS/Steam Deck). When a game launches,
-//      MoonRock can hand off display control to gamescope, which provides its
-//      own optimized compositing, scaling, and VRR management. When the game
-//      exits, control returns to MoonRock.
-//
-//   6. PIPEWIRE SCREENCAST — For screen sharing (Discord, OBS, etc.), this
+//   5. PIPEWIRE SCREENCAST — For screen sharing (Discord, OBS, etc.), this
 //      module can provide compositor frames to PipeWire. This is a stub for
 //      now — the actual PipeWire integration will come later.
+//
+// NOTE: MoonRock does NOT launch gamescope in-session. The pure-Gamescope
+// gaming experience lives in its own SDDM session (copycatos-gaming). This
+// module's only relationship with gamescope is that a nested gamescope
+// spawned by moonbase (for a Wayland-native app) presents as an X11 client
+// MoonRock reparents like any other — no special-case handling here.
 //
 // ============================================================================
 
@@ -53,6 +53,7 @@
 #define MR_DISPLAY_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <X11/Xlib.h>
 
 // Forward declaration — full definition lives in wm_compat.h.
@@ -88,34 +89,59 @@ typedef struct {
                              // active monitor is connected through exactly one CRTC.
     unsigned long output_id; // XRandR output ID — represents the physical connector
                              // (HDMI port, DisplayPort, etc.)
+
+    // ── Per-output HiDPI scale (CopyCatOS HiDPI mandate) ──
+    //
+    // Every output carries its own scale factor. The public MoonBase API
+    // measures in points — MoonRock converts points to physical pixels
+    // per-output using this scale. Fractional scales (1.25, 1.5, 1.75,
+    // …) are first-class — no integer rounding anywhere.
+    //
+    // edid_hash   — 64-bit FNV-1a hash of the raw EDID blob. Stable
+    //               across reboots and cable swaps. The persistence
+    //               file keys per-output overrides on this hash, so the
+    //               same monitor gets the same scale when plugged back
+    //               in, regardless of which port it lands on.
+    // mm_width/mm_height — physical panel size in millimeters, as
+    //               reported by the EDID (X server parses this into
+    //               XRROutputInfo->mm_width / mm_height). Combined with
+    //               pixel resolution, gives PPI.
+    // default_scale — picked from PPI bands during enumeration. The
+    //               fallback the system chooses when the user hasn't
+    //               set anything for this particular monitor.
+    // user_scale — user's persisted override for this EDID hash, or
+    //               0.0 if no override exists. Set from the Displays
+    //               pane in SysPrefs (later slice) and written out via
+    //               display_set_scale_for_output().
+    // scale      — the effective scale to use right now (user_scale if
+    //               non-zero, otherwise default_scale). This is the
+    //               value window_create replies, backing-scale queries,
+    //               and chrome rendering all consult.
+    uint8_t       edid_hash[8];
+    int           mm_width, mm_height;
+    float         default_scale;
+    float         user_scale;
+    float         scale;
 } MROutput;
 
 
 // ============================================================================
-//  Gaming mode
+//  Compositor scanout mode
 // ============================================================================
 //
-// Gaming mode controls how MoonRock handles fullscreen games. There are three
-// strategies, each with different trade-offs:
+// Two compositing paths for fullscreen clients:
 //
-//   OFF     — Normal compositing. Every window (including the game) goes through
-//             MoonRock's GL pipeline. This adds a small amount of latency (one
-//             extra buffer copy) but keeps all compositor effects working.
+//   OFF     — Normal compositing. Every window goes through MoonRock's GL
+//             pipeline. One extra buffer copy, all compositor effects work.
 //
-//   BYPASS  — Direct scanout. The game's buffer is sent directly to the display
-//             hardware, skipping the compositor entirely. Lowest possible latency,
-//             but overlays (notifications, Steam overlay) won't render on top of
-//             the game unless they use the game's own overlay mechanism.
-//
-//   GAMESCOPE — MoonRock hands off display control to Valve's gamescope compositor,
-//              which is purpose-built for gaming. Gamescope handles its own VRR,
-//              scaling (FSR), and frame limiting. When the game exits, MoonRock
-//              takes control back.
+//   BYPASS  — Direct scanout. The fullscreen window's buffer is sent directly
+//             to display hardware, skipping the compositor entirely. Lowest
+//             possible latency. Used for full-screen unredirected clients on
+//             any output (multi-monitor direct-scanout fast path).
 
 typedef enum {
     GAME_MODE_OFF,           // Normal compositing — all windows go through MoonRock
-    GAME_MODE_BYPASS,        // Direct scanout — game buffer goes straight to display
-    GAME_MODE_GAMESCOPE,     // Handed off to gamescope for dedicated game compositing
+    GAME_MODE_BYPASS,        // Direct scanout — buffer goes straight to display
 } GameMode;
 
 
@@ -159,9 +185,8 @@ bool display_init(Display *dpy, int screen);
 
 // Shut down display management and free all resources.
 //
-// Disables VRR on any outputs where we enabled it, kills any running
-// gamescope process, shuts down PipeWire screencast if active, and frees
-// the output list.
+// Disables VRR on any outputs where we enabled it, disables direct scanout
+// if active, shuts down PipeWire screencast, and frees the output list.
 void display_shutdown(void);
 
 
@@ -181,9 +206,9 @@ MROutput *display_get_outputs(int *count);
 
 // Get the primary display output.
 //
-// The primary display is where fullscreen games default to, where direct
-// scanout targets, and where gamescope launches. If no output is explicitly
-// marked as primary by XRandR, we pick the first one.
+// The primary display is where fullscreen games default to and where direct
+// scanout targets. If no output is explicitly marked as primary by XRandR,
+// we pick the first one.
 //
 // Returns NULL if no outputs are available (e.g., all monitors unplugged).
 MROutput *display_get_primary(void);
@@ -261,6 +286,31 @@ int display_get_target_frame_time(void);
 //   dpy — The X display connection.
 void display_handle_hotplug(Display *dpy);
 
+// ============================================================================
+//  Per-output scale (HiDPI)
+// ============================================================================
+//
+// Apps measure in points. MoonRock maps points -> physical pixels per output
+// using the scale returned here. Backing scale for a MoonBase window is the
+// scale of the output currently hosting it.
+
+// Effective scale for the given output (user override if set, otherwise the
+// default picked from EDID-derived PPI during enumeration). Returns 1.0 if
+// output is NULL so callers never have to null-check.
+float display_get_scale_for_output(const MROutput *output);
+
+// Effective scale for the primary output — shortcut for the common case where
+// a brand-new window lands on the primary display.
+float display_get_primary_scale(void);
+
+// Persist a user-override scale for the output's EDID. Updates the in-memory
+// user_scale + scale of every connected output that shares that EDID hash,
+// then rewrites the persistence file at
+// ~/.local/share/moonrock/display-scales.conf. A scale of 0.0 clears the
+// override (reverts to the default). Returns true on a successful write.
+bool display_set_scale_for_output(MROutput *output, float scale);
+
+
 // Get the viewport rectangle for a specific output.
 //
 // Fills in the position and size of the given output within the virtual
@@ -278,19 +328,17 @@ int display_get_viewport_for_output(MROutput *output,
 
 
 // ============================================================================
-//  Gaming mode control
+//  Compositor scanout mode control
 // ============================================================================
 
-// Set the current gaming mode.
+// Set the current scanout mode.
 //
 // Switching modes has side effects:
 //   - OFF -> BYPASS: enables direct scanout on the focused fullscreen window.
-//   - OFF -> GAMESCOPE: launches gamescope and suspends MoonRock compositing.
 //   - BYPASS -> OFF: disables direct scanout, resumes normal compositing.
-//   - GAMESCOPE -> OFF: waits for gamescope to exit, resumes MoonRock.
 void display_set_game_mode(GameMode mode);
 
-// Get the current gaming mode.
+// Get the current scanout mode.
 GameMode display_get_game_mode(void);
 
 
@@ -353,39 +401,6 @@ void display_disable_direct_scanout(void);
 // should skip rendering). Returns false if the compositor should render
 // normally.
 bool display_check_direct_scanout(struct CCWM *wm);
-
-
-// ============================================================================
-//  gamescope integration
-// ============================================================================
-//
-// gamescope is Valve's micro-compositor for gaming on Linux (SteamOS, Steam
-// Deck). It provides its own VRR management, FSR upscaling, frame limiting,
-// and overlay support — all optimized for a single game.
-//
-// When we "hand off" to gamescope, MoonRock stops compositing and gamescope
-// takes over the display. When the game exits, gamescope exits, and MoonRock
-// resumes.
-
-// Launch gamescope with a specific game command.
-//
-// Builds a gamescope command line using the primary display's resolution and
-// refresh rate, then forks a child process to run it. MoonRock switches to
-// GAME_MODE_GAMESCOPE.
-//
-// Parameters:
-//   game_command — The shell command to launch the game (passed to gamescope
-//                  after the "--" separator).
-//
-// Returns true if gamescope was launched successfully, false on fork failure
-// or if gamescope is not installed.
-bool display_launch_gamescope(const char *game_command);
-
-// Return from gamescope to normal MoonRock compositing.
-//
-// Waits for the gamescope child process to exit (non-blocking check), then
-// switches back to GAME_MODE_OFF and resumes MoonRock compositing.
-void display_return_from_gamescope(void);
 
 
 // ============================================================================

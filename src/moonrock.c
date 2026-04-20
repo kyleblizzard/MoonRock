@@ -41,6 +41,7 @@
 #include "moonrock_anim.h"
 #include "moonrock_mission_control.h"
 #include "moonrock_touch.h"
+#include "moonbase_host.h"
 #include "ewmh.h"
 
 // Forward declaration removed — compositor.c is no longer linked.
@@ -112,6 +113,13 @@ struct WindowTexture {
     bool has_alpha;         // True if the window uses a 32-bit ARGB visual (transparency)
     bool bound;             // True if the texture is currently bound to a pixmap
     bool override_redirect; // True if the window has override_redirect set (menus, tooltips, popups)
+
+    // Set to true while a genie minimize animation is playing for this window.
+    // When true, the normal composite pass skips this window entirely — the
+    // animation system's anim_draw() renders it instead (as the deformed genie
+    // shape). Without this flag, the window would appear twice each frame:
+    // once in its original position and once as the animated genie effect.
+    bool animating_out;
 
     // ── Cached Gaussian shadow texture (Phase 2) ──
     // Instead of re-computing the blurred shadow every frame, we cache the
@@ -1075,6 +1083,12 @@ static void release_window_texture(CCWM *wm, struct WindowTexture *wt)
         wt->shadow_tex_h = 0;
     }
 
+    // Cancel any animations still referencing this texture BEFORE deleting it.
+    // anim_draw() draws both active AND just-completed animations (progress==1.0).
+    // If the texture is deleted while a completed animation slot still references
+    // it, the next composite frame would try to bind a deleted GL texture handle.
+    anim_cancel_for_texture(wt->texture);
+
     // Destroy the OpenGL texture on the GPU
     if (wt->texture) {
         glDeleteTextures(1, &wt->texture);
@@ -1803,6 +1817,17 @@ void mr_composite(CCWM *wm)
     // top, and normal windows are sandwiched between them.
 
     for (int pass = 0; pass < 3; pass++) {
+        // ── MoonBase surfaces ──
+        // MoonBase windows are compositor-internal surfaces (not X
+        // windows), so they don't appear in mr.windows[]. We render
+        // them alongside normal X application windows — between the
+        // desktop pass and the dock/panel pass — so that Aqua chrome
+        // drawn by moonrock still lands above them in slice 3c.2b and
+        // panels stay on top.
+        if (pass == 1) {
+            mb_host_render(mr.shaders.basic, mr.projection);
+        }
+
         for (int i = 0; i < mr.window_count; i++) {
             struct WindowTexture *wt = &mr.windows[i];
 
@@ -1830,6 +1855,12 @@ void mr_composite(CCWM *wm)
 
             // Skip windows that don't belong to this pass
             if (window_pass != pass) continue;
+
+            // Skip windows that are currently being animated out (genie minimize).
+            // During the animation, anim_draw() renders this window as a deformed
+            // genie shape. If we drew it here too, it would appear twice each frame:
+            // once in its normal position, once as the animated genie effect.
+            if (wt->animating_out) continue;
 
             // Skip zero-size windows (shouldn't happen, but be defensive)
             if (wt->w <= 0 || wt->h <= 0) continue;
@@ -1883,6 +1914,12 @@ void mr_composite(CCWM *wm)
             if (window_pass == 2 && mr.shaders.blur_h && mr.shaders.blur_v) {
                 ThemeDefinition *theme = plugin_get_theme();
                 float blur_radius = theme ? theme->blur_behind_radius : 0.0f;
+                // Only blur narrow panel windows (menubar ~46px).
+                // The dock window is ~160px tall — its glass shelf look comes
+                // from the scurve-xl-opaque.png texture, not blur-behind.
+                // Blurring the whole dock rectangle creates a dark haze over
+                // the transparent icon area above the shelf.
+                if (blur_radius > 0.0f && wt->h > 80) blur_radius = 0.0f;
                 if (blur_radius > 0.0f) {
                     // Capture the framebuffer region behind this panel.
                     // glCopyTexImage2D reads from the current read buffer
@@ -2265,30 +2302,171 @@ void mr_shutdown(CCWM *wm)
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// SECTION: Animation stubs (Phase 4+)
+// SECTION: Genie minimize animation
 // ────────────────────────────────────────────────────────────────────────
 //
-// These are placeholder functions for future animation support. The genie
-// minimize effect will warp the window's texture using a mesh distortion
-// in the GL pipeline. For now, these are no-ops so the rest of the codebase
-// can call them without conditional compilation.
+// The genie minimize effect works in three stages:
+//
+//   1. mr_animate_minimize() — Called when the user clicks the yellow button.
+//      Finds the window's OpenGL texture, sets wt->animating_out = true so
+//      the normal composite pass skips it, then starts an ANIM_GENIE_MINIMIZE
+//      animation. A completion callback is registered to hide the window after
+//      the animation finishes.
+//
+//   2. anim_draw() — Runs every composite frame while the animation is active.
+//      Draws the window texture as a deformed trapezoid that narrows toward
+//      the dock icon position, creating the "pouring liquid" genie effect.
+//
+//   3. on_genie_minimize_done() — Called by the animation system when progress
+//      reaches 1.0. Unmaps the window frame (hiding it from the screen),
+//      sets c->minimized = true, and frees the callback data.
+//
+// Restore (un-minimize) is handled by clicking the window's minimized
+// representation in the dock — that path calls mr_animate_restore(), which
+// re-maps the frame and plays the reverse genie animation.
+
+// Heap-allocated userdata passed to the genie minimize completion callback.
+// Contains everything the callback needs to hide the window after animation.
+typedef struct {
+    CCWM   *wm;   // Window manager — needed for XUnmapWindow and ewmh_update
+    Client *c;    // The client being minimized
+    Window  frame; // Captured frame window ID (in case c is freed before callback)
+} GenieMinimizeData;
+
+// Called by the animation system when the genie minimize animation completes.
+// At this point the animation has finished drawing — we now actually hide
+// the window by unmapping its frame.
+static void on_genie_minimize_done(void *userdata)
+{
+    GenieMinimizeData *data = (GenieMinimizeData *)userdata;
+    if (!data) return;
+
+    CCWM   *wm    = data->wm;
+    Client *c     = data->c;
+    Window  frame = data->frame;
+    free(data);
+
+    // Safety: make sure the client still exists and has the same frame.
+    // If the app quit during the animation, c might be dangling — we compare
+    // the frame window ID to detect this. If c is gone, we have nothing to do
+    // (the window was already cleaned up by on_destroy_notify).
+    if (!c || c->frame != frame) {
+        fprintf(stderr, "[moonrock] Genie callback: client gone, skipping hide\n");
+        return;
+    }
+
+    // Unmap the frame window. This hides the window from the screen.
+    // The client window (a child of the frame) is automatically unmapped too.
+    //
+    // on_unmap_notify will receive an UnmapNotify for the client, but checks
+    // c->minimized before calling unframe_window — so the frame survives and
+    // the window can be restored later.
+    c->minimized = true;
+    c->mapped    = false;
+    XUnmapWindow(wm->dpy, c->frame);
+
+    // Tell the taskbar/dock that the window list changed so they can update
+    // their minimized-window indicators.
+    ewmh_update_client_list(wm);
+
+    fprintf(stderr, "[moonrock] Genie minimize complete: hid window '%s'\n",
+            c->title);
+}
 
 void mr_animate_minimize(CCWM *wm, Client *c,
-                              int dock_icon_x, int dock_icon_y)
+                         int dock_icon_x, int dock_icon_y)
 {
-    // Phase 4: Genie minimize animation.
-    // Will distort the window texture over multiple frames to create the
-    // classic macOS "sucking into the dock" effect.
-    (void)wm;
-    (void)c;
-    (void)dock_icon_x;
-    (void)dock_icon_y;
+    if (!wm || !c || !c->frame) return;
+
+    // Look up this window's OpenGL texture from the compositor's tracked list.
+    // The texture was created when the window was mapped — it holds the current
+    // rendered content of the window that we will distort into the genie shape.
+    struct WindowTexture *wt = find_window_texture(c->frame);
+    if (!wt || !wt->texture) {
+        // No texture available (compositor may not have processed this window
+        // yet). Fall back to immediately hiding the window without animation.
+        fprintf(stderr, "[moonrock] Genie minimize: no texture for 0x%lx, "
+                "falling back to immediate hide\n", c->frame);
+        XUnmapWindow(wm->dpy, c->frame);
+        c->mapped    = false;
+        c->minimized = true;
+        return;
+    }
+
+    // Allocate the completion callback data.
+    // This struct is passed to on_genie_minimize_done() when the animation
+    // finishes — it carries both the WM and the client so we can hide it.
+    GenieMinimizeData *data = malloc(sizeof(GenieMinimizeData));
+    if (!data) {
+        // Out of memory — fall back to immediate hide.
+        XUnmapWindow(wm->dpy, c->frame);
+        c->mapped    = false;
+        c->minimized = true;
+        return;
+    }
+    data->wm    = wm;
+    data->c     = c;
+    data->frame = c->frame;  // Capture frame ID for stale-check in callback
+
+    // Mark this window as animating out. The normal composite draw loop skips
+    // windows with animating_out=true so we don't see the window in both its
+    // original position AND as the genie effect simultaneously.
+    wt->animating_out = true;
+
+    // Compute source geometry: where the window is right now on screen.
+    // wt->x/y/w/h are kept in sync by sync_tracked_windows().
+    float src_x = (float)wt->x;
+    float src_y = (float)wt->y;
+    float src_w = (float)wt->w;
+    float src_h = (float)wt->h;
+
+    // Compute destination: the center of the dock icon the window pours into.
+    // The destination is a tiny 48x4 strip — fully squished at the dock edge.
+    float dst_w = 48.0f;
+    float dst_h = 4.0f;
+    float dst_x = (float)dock_icon_x - dst_w / 2.0f;
+    float dst_y = (float)dock_icon_y - dst_h / 2.0f;
+
+    // Start the genie animation using the raw anim_start() call so we can
+    // attach our completion callback. We set userdata to the GenieMinimizeData
+    // struct allocated above — the callback will free it when it runs.
+    int slot = anim_start(
+        ANIM_GENIE_MINIMIZE,
+        EASE_IN_QUAD,
+        0.5,                         // 0.5 seconds — matches macOS timing
+        wt->texture, wt->w, wt->h,
+        src_x, src_y, src_w, src_h,  // Source: window's current screen position
+        dst_x, dst_y, dst_w, dst_h,  // Destination: dock icon area
+        1.0f, 0.7f,                   // Alpha: full to slightly faded (liquid feel)
+        data                          // Passed to on_genie_minimize_done()
+    );
+
+    if (slot < 0) {
+        // All animation slots are full — hide immediately without animation.
+        fprintf(stderr, "[moonrock] Genie minimize: no animation slots, "
+                "falling back to immediate hide\n");
+        free(data);
+        wt->animating_out = false;  // Clear since we're not animating
+        XUnmapWindow(wm->dpy, c->frame);
+        c->mapped    = false;
+        c->minimized = true;
+        return;
+    }
+
+    // Wire up the completion callback. When progress reaches 1.0, the animation
+    // system calls on_genie_minimize_done(data) which hides the window.
+    anim_set_on_complete(slot, on_genie_minimize_done);
+
+    fprintf(stderr, "[moonrock] Genie minimize started: window '%s' "
+            "src=(%.0f,%.0f,%.0f,%.0f) dst=(%.0f,%.0f)\n",
+            c->title, src_x, src_y, src_w, src_h,
+            (float)dock_icon_x, (float)dock_icon_y);
 }
 
 void mr_animate_restore(CCWM *wm, Client *c,
                              int dock_icon_x, int dock_icon_y)
 {
-    // Phase 4: Genie restore animation (reverse of minimize).
+    // Phase 5: Genie restore animation (reverse of minimize).
     // The window texture expands from the dock icon back to full size.
     (void)wm;
     (void)c;
@@ -2298,11 +2476,11 @@ void mr_animate_restore(CCWM *wm, Client *c,
 
 bool mr_animation_active(CCWM *wm)
 {
-    // Phase 4: Returns true if any animation is in progress.
-    // When active, the main loop should keep calling mr_composite()
-    // at the refresh rate to advance the animation smoothly.
+    // Returns true if any animation is currently in progress.
+    // The main composite loop uses this to keep rendering at 60Hz while
+    // animations are playing (rather than waiting for X events to drive redraws).
     (void)wm;
-    return false;
+    return anim_any_active();
 }
 
 

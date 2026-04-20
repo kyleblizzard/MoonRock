@@ -3,9 +3,8 @@
 //
 // MoonRock was created by Kyle Blizzard. Feel free to use it and improve it!
 // www.blizzard.show/moonrock/
-
 // ============================================================================
-// wm_compat.h — Bridge between MoonRock compositor and cc-wm types
+// wm_compat.h — Bridge between MoonRock compositor and moonrock types
 // ============================================================================
 //
 // Purpose:
@@ -14,7 +13,7 @@
 //   that bridge so MoonRock files can reference WM types without depending on
 //   the full WM implementation.
 //
-//   When MoonRock is compiled as part of cc-wm (the normal case), this simply
+//   When MoonRock is compiled as part of moonrock (the normal case), this simply
 //   includes wm.h. The MR_EMBEDDED_IN_WM define is set by the meson build.
 // ============================================================================
 
@@ -22,7 +21,7 @@
 #define WM_COMPAT_H
 
 #ifdef MR_EMBEDDED_IN_WM
-// Compiled as part of cc-wm — include the real WM header
+// Compiled as part of moonrock — include the real WM header
 #include "wm.h"
 #else
 // Standalone build — provide minimal forward declarations
