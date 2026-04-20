@@ -186,3 +186,36 @@ float moonrock_scale_for_name(const MoonRockScaleTable *t, const char *name)
     }
     return 1.0f;
 }
+
+
+// ── Requester ──────────────────────────────────────────────────────────
+
+bool moonrock_request_scale(Display *dpy, const char *output_name, float scale)
+{
+    if (!dpy || !output_name || !*output_name) return false;
+
+    // Reject obvious NaN/inf before sending; MoonRock will reject anything
+    // outside 0.5–4.0 on its own but the wire format can't carry NaN cleanly.
+    if (scale < 0.0f || scale > 10.0f || scale != scale) return false;
+
+    // Writing a property with non-printable chars would break the line parser
+    // on the MoonRock side. Output names are XRandR identifiers (ASCII plus
+    // a few punctuation chars) so we only guard against the two separator
+    // characters that would confuse the parser.
+    for (const char *p = output_name; *p; p++) {
+        if (*p == ' ' || *p == '\n') return false;
+    }
+
+    Atom set_atom = XInternAtom(dpy, MOONROCK_SET_SCALE_ATOM_NAME, False);
+    Atom utf8    = XInternAtom(dpy, "UTF8_STRING", False);
+
+    char line[128];
+    int n = snprintf(line, sizeof(line), "%s %.3f\n", output_name, (double)scale);
+    if (n < 0 || n >= (int)sizeof(line)) return false;
+
+    XChangeProperty(dpy, DefaultRootWindow(dpy),
+                    set_atom, utf8, 8, PropModeReplace,
+                    (unsigned char *)line, n);
+    XFlush(dpy);
+    return true;
+}

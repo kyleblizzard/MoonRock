@@ -1112,6 +1112,102 @@ bool display_set_scale_for_output(MROutput *output, float scale)
 
 
 // ============================================================================
+//  Reverse scale-request atom — pane writes, MoonRock reads
+// ============================================================================
+//
+// The Displays pane in systemcontrol lives in a separate X11 process and
+// cannot call display_set_scale_for_output() directly. Instead it writes a
+// single line to the root-window property _MOONROCK_SET_OUTPUT_SCALE, which
+// we read here and dispatch to the setter. This mirrors the forward-
+// direction publish atom, so the entire bridge uses one wire shape.
+
+static Atom g_set_scale_atom = None;
+
+Atom display_scale_request_atom(Display *dpy)
+{
+    if (g_set_scale_atom == None && dpy) {
+        g_set_scale_atom = XInternAtom(dpy,
+                                       MOONROCK_SET_SCALE_ATOM_NAME, False);
+    }
+    return g_set_scale_atom;
+}
+
+// Name-match lookup. Case-sensitive so the pane can match the exact string
+// MoonRock publishes. Returns NULL on no match — callers log and move on.
+static MROutput *find_output_by_name(const char *name)
+{
+    if (!name) return NULL;
+    for (int i = 0; i < output_count; i++) {
+        if (strcmp(outputs[i].name, name) == 0) return &outputs[i];
+    }
+    return NULL;
+}
+
+void display_handle_scale_request(Display *dpy, Window root)
+{
+    if (!dpy) return;
+    Atom atom = display_scale_request_atom(dpy);
+    if (atom == None) return;
+
+    Atom actual_type = None;
+    int  actual_format = 0;
+    unsigned long nitems = 0, bytes_after = 0;
+    unsigned char *prop = NULL;
+
+    int rc = XGetWindowProperty(dpy, root, atom,
+                                0, 256, False, AnyPropertyType,
+                                &actual_type, &actual_format,
+                                &nitems, &bytes_after, &prop);
+    if (rc != Success || !prop) {
+        if (prop) XFree(prop);
+        return;
+    }
+
+    // The pane writes one UTF8_STRING line. We only need the first line
+    // (the contract is one request per property write); additional lines
+    // are ignored so malformed clients can't drive multiple setters in
+    // one write.
+    char line[128];
+    size_t len = (size_t)nitems;
+    if (len >= sizeof(line)) len = sizeof(line) - 1;
+    memcpy(line, prop, len);
+    line[len] = '\0';
+    XFree(prop);
+
+    // Strip to the first newline.
+    char *nl = strchr(line, '\n');
+    if (nl) *nl = '\0';
+
+    char   name[MOONROCK_SCALE_NAME_MAX];
+    double scale = 0.0;
+    if (sscanf(line, "%63s %lf", name, &scale) != 2) {
+        fprintf(stderr, "[display] Ignoring malformed scale request: '%s'\n",
+                line);
+        XDeleteProperty(dpy, root, atom);
+        return;
+    }
+
+    MROutput *o = find_output_by_name(name);
+    if (!o) {
+        fprintf(stderr,
+                "[display] Scale request for unknown output '%s' — ignoring\n",
+                name);
+        XDeleteProperty(dpy, root, atom);
+        return;
+    }
+
+    fprintf(stderr, "[display] Scale request: %s → %.3f\n",
+            name, scale);
+    display_set_scale_for_output(o, (float)scale);
+
+    // Delete the property so an immediate re-write of the same value still
+    // produces a PropertyNotify (X11 only fires notifications on value
+    // *change* or on a fresh set-after-delete).
+    XDeleteProperty(dpy, root, atom);
+}
+
+
+// ============================================================================
 //  Gaming mode
 // ============================================================================
 

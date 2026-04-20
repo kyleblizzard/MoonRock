@@ -49,6 +49,18 @@
 // constant below is client-side.
 #define MOONROCK_SCALE_ATOM_NAME "_MOONROCK_OUTPUT_SCALES"
 
+// Reverse-direction atom for writing a scale change request back to MoonRock.
+// systemcontrol's Displays pane writes a single line:
+//
+//     <output_name> <scale>\n     e.g. "eDP-1 1.500\n"
+//
+// on this atom (UTF8_STRING, format 8). MoonRock's event loop sees the
+// PropertyNewValue notification, parses the line, calls
+// display_set_scale_for_output(), and then deletes the property so a
+// second write of the same value still generates a PropertyNotify. A scale
+// of 0 clears the user override and reverts to the EDID-derived default.
+#define MOONROCK_SET_SCALE_ATOM_NAME "_MOONROCK_SET_OUTPUT_SCALE"
+
 // Cap on how many outputs we parse into a single table. Matches
 // MAX_OUTPUTS on the publisher side so we never drop a legitimate entry.
 #define MOONROCK_SCALE_MAX_OUTPUTS 16
@@ -107,5 +119,21 @@ float moonrock_scale_for_point(const MoonRockScaleTable *table, int x, int y);
 // Look up the scale for an output by its name (e.g. "eDP-1"). Returns 1.0
 // if the table is invalid or no output matches.
 float moonrock_scale_for_name(const MoonRockScaleTable *table, const char *name);
+
+
+// ── Requester — systemcontrol Displays pane → MoonRock ──────────────────
+// Writes _MOONROCK_SET_OUTPUT_SCALE on the root window so MoonRock picks
+// up a user-initiated scale change. MoonRock owns the EDID hash + config
+// persistence — the pane only sends the requested pair.
+//
+//   output_name — the same name MoonRock publishes in the scale table
+//                 (e.g. "eDP-1"). Case-sensitive exact match.
+//   scale       — desired effective scale (0.5 – 4.0), or 0.0 to clear the
+//                 user override and fall back to the EDID-derived default.
+//
+// Returns true on a successful X write (MoonRock may still reject an
+// out-of-range value; check the published scale table on the next
+// PropertyNotify to confirm).
+bool moonrock_request_scale(Display *dpy, const char *output_name, float scale);
 
 #endif // MOONROCK_SCALE_H

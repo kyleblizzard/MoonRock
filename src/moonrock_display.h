@@ -311,6 +311,24 @@ float display_get_primary_scale(void);
 bool display_set_scale_for_output(MROutput *output, float scale);
 
 
+// ── Reverse scale-request atom: pane → MoonRock ────────────────────────
+// The Displays pane in systemcontrol writes its chosen scale to the
+// _MOONROCK_SET_OUTPUT_SCALE root-window property (see moonrock_scale.h).
+// The WM event loop calls display_handle_scale_request() from the
+// PropertyNotify dispatch; this parses the line, looks up the named
+// output, and applies the change via display_set_scale_for_output(). The
+// property is deleted after handling so a second write of the same value
+// still produces a PropertyNotify.
+
+// Atom for _MOONROCK_SET_OUTPUT_SCALE. Interned lazily on first call.
+// Safe to invoke from any thread that already has the display lock.
+Atom display_scale_request_atom(Display *dpy);
+
+// Read, parse, dispatch, and delete the request property on `root`.
+// No-op if the property is missing or malformed.
+void display_handle_scale_request(Display *dpy, Window root);
+
+
 // Get the viewport rectangle for a specific output.
 //
 // Fills in the position and size of the given output within the virtual
