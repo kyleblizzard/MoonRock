@@ -129,6 +129,11 @@ struct WindowTexture {
     GLuint shadow_tex;       // OpenGL texture holding the pre-blurred shadow
     int shadow_tex_w;        // Width the shadow was generated at (includes padding)
     int shadow_tex_h;        // Height the shadow was generated at (includes padding)
+    float shadow_scale;      // Backing scale at generation time. If the window
+                             // migrates to an output of a different scale (e.g.
+                             // dragged from a 1.0× external onto the 1.75×
+                             // Legion panel) the cached blur is wrong density
+                             // and must be regenerated.
 };
 
 // ────────────────────────────────────────────────────────────────────────
@@ -1484,21 +1489,37 @@ static void generate_shadow_texture(struct WindowTexture *wt, bool focused)
     if (!wt || wt->w <= 0 || wt->h <= 0) return;
 
     // ── Shadow parameters ──
-    // radius:     how far the shadow extends from the window edge.
-    //             Focused windows get a larger radius for emphasis.
+    // radius:     how far the shadow extends from the window edge, in
+    //             physical pixels. Focused windows get a larger radius.
+    //             SHADOW_RADIUS / SHADOW_RADIUS_INACTIVE are in points,
+    //             so we multiply by the backing scale of the output
+    //             hosting this window — a 20 pt shadow is 20 px at 1.0×
+    //             and 35 px at 1.75× (Legion panel), keeping the shadow's
+    //             visual weight constant across densities.
     // peak_alpha: maximum opacity of the shadow directly under the window.
     //             Focused = darker (0.45), unfocused = lighter (0.22).
     // pad:        extra pixels around the window rect to give the blur room
     //             to fade out. We use 2x the radius to avoid clipping.
-    int radius = focused ? SHADOW_RADIUS : SHADOW_RADIUS_INACTIVE;
-    float peak_alpha = focused ? (float)SHADOW_ALPHA_ACTIVE
-                               : (float)SHADOW_ALPHA_INACTIVE;
 
     // The chrome is the visible window area (excluding shadow padding in the
     // frame). The shadow is generated around this chrome rectangle.
     int chrome_w = wt->w - SHADOW_LEFT - SHADOW_RIGHT;
     int chrome_h = wt->h - SHADOW_TOP - SHADOW_BOTTOM;
     if (chrome_w <= 0 || chrome_h <= 0) return;
+
+    // Query the scale at the chrome's center so a window that straddles
+    // two outputs keys off the one it's mostly on. A 1× fallback is baked
+    // into display_scale_at_point for the hotplug-transient gap case.
+    float scale = display_scale_at_point(wt->x + SHADOW_LEFT + chrome_w / 2,
+                                         wt->y + SHADOW_TOP  + chrome_h / 2);
+    if (scale < 0.5f) scale = 1.0f;
+    wt->shadow_scale = scale;
+
+    int radius_pts = focused ? SHADOW_RADIUS : SHADOW_RADIUS_INACTIVE;
+    int radius = (int)((float)radius_pts * scale + 0.5f);
+    if (radius < 1) radius = 1;
+    float peak_alpha = focused ? (float)SHADOW_ALPHA_ACTIVE
+                               : (float)SHADOW_ALPHA_INACTIVE;
 
     int pad = radius * 2;
     int shadow_w = chrome_w + pad * 2;
@@ -1683,17 +1704,29 @@ static void draw_window_shadow(struct WindowTexture *wt, bool focused)
     int chrome_h = wt->h - SHADOW_TOP - SHADOW_BOTTOM;
     if (chrome_w <= 0 || chrome_h <= 0) return;
 
-    int radius = focused ? SHADOW_RADIUS : SHADOW_RADIUS_INACTIVE;
+    // Scale at the chrome center — same point the generator samples. The
+    // chrome rect is frame-pixel coordinates, so SHADOW_LEFT/TOP are
+    // unchanged here even at HiDPI.
+    float scale = display_scale_at_point(wt->x + SHADOW_LEFT + chrome_w / 2,
+                                         wt->y + SHADOW_TOP  + chrome_h / 2);
+    if (scale < 0.5f) scale = 1.0f;
+
+    int radius_pts = focused ? SHADOW_RADIUS : SHADOW_RADIUS_INACTIVE;
+    int radius = (int)((float)radius_pts * scale + 0.5f);
+    if (radius < 1) radius = 1;
     int pad = radius * 2;
     int expected_w = chrome_w + pad * 2;
     int expected_h = chrome_h + pad * 2;
 
     // Generate or regenerate the shadow texture if needed.
-    // This happens on first draw (shadow_tex == 0) or after a resize
-    // (dimensions no longer match).
+    // Triggers: first draw (shadow_tex == 0), window resized (dims
+    // changed), or the window migrated to an output of a different scale
+    // (cached blur is now the wrong density). Epsilon compare guards
+    // against float drift from repeated multiply/divide paths.
     if (!wt->shadow_tex ||
         wt->shadow_tex_w != expected_w ||
-        wt->shadow_tex_h != expected_h) {
+        wt->shadow_tex_h != expected_h ||
+        fabsf(wt->shadow_scale - scale) > 0.01f) {
         generate_shadow_texture(wt, focused);
     }
 
@@ -1707,11 +1740,15 @@ static void draw_window_shadow(struct WindowTexture *wt, bool focused)
     //
     // chrome_x/chrome_y = top-left of the chrome area in screen coordinates.
     // The shadow quad starts 'pad' pixels above-left of the chrome, with
-    // an additional y_offset downward to simulate a top-down light.
+    // an additional y_offset downward to simulate a top-down light. The
+    // y_offset scales with backing density so the "light from above"
+    // reads the same at 1.0× and 1.75×.
     int chrome_x = wt->x + SHADOW_LEFT;
     int chrome_y = wt->y + SHADOW_TOP;
+    int y_offset_px = (int)((float)SHADOW_Y_OFFSET * scale + 0.5f);
+    if (y_offset_px < 1) y_offset_px = 1;
     float sx = (float)(chrome_x - pad);
-    float sy = (float)(chrome_y - pad + SHADOW_Y_OFFSET);
+    float sy = (float)(chrome_y - pad + y_offset_px);
 
     // ── Draw the shadow quad using the shader pipeline ──
     // Activate the shadow shader which reads the alpha channel from the

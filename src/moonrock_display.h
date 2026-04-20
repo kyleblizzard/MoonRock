@@ -303,6 +303,17 @@ float display_get_scale_for_output(const MROutput *output);
 // a brand-new window lands on the primary display.
 float display_get_primary_scale(void);
 
+// Effective scale at a specific point in virtual-screen coordinates. Finds
+// the output whose rect contains (x, y) and returns its scale; if the point
+// falls in a gap between outputs (shouldn't happen in practice, but can on
+// a fresh hotplug frame), returns the primary's scale. This is the right
+// helper for chrome that wants to pick density based on where a window
+// actually sits — the shadow-texture generator in particular, so a window
+// migrating between a 1.0× external and the 1.75× Legion panel regenerates
+// its blur at the correct radius without threading scale through every
+// map/move/resize path.
+float display_scale_at_point(int x, int y);
+
 // Persist a user-override scale for the output's EDID. Updates the in-memory
 // user_scale + scale of every connected output that shares that EDID hash,
 // then rewrites the persistence file at

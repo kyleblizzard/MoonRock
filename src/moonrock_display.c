@@ -1040,6 +1040,23 @@ float display_get_primary_scale(void)
     return display_get_scale_for_output(display_get_primary());
 }
 
+float display_scale_at_point(int x, int y)
+{
+    // Simple rect-containment scan. output_count is tiny (~4 in any sane
+    // setup), so the O(N) loop is never a hot path. If the point lands in
+    // a gap — which shouldn't happen on a fully configured RandR layout —
+    // we fall back to the primary's scale so the caller still gets a
+    // sensible density.
+    for (int i = 0; i < output_count; i++) {
+        MROutput *o = &outputs[i];
+        if (x >= o->x && x < o->x + o->width &&
+            y >= o->y && y < o->y + o->height) {
+            return display_get_scale_for_output(o);
+        }
+    }
+    return display_get_primary_scale();
+}
+
 bool display_set_scale_for_output(MROutput *output, float scale)
 {
     if (!output) return false;
